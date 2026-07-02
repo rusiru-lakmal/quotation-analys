@@ -8,4 +8,6 @@ __pycache__/
 
 # Large model outputs and training checkpoints
 model_output/
+model_output_layoutlm/
 results/
+layoutlmv3-insurance-results/

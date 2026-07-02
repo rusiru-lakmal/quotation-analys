@@ -1,89 +1,163 @@
 import json
 import random
 
-# We will generate synthetic insurance quote sentences/paragraphs for training
-# and validation of our custom NER/Token Classification model.
+# Insurance Domain Vocabularies
+companies = ["Allianz Insurance", "Ceylinco General", "HNB Assurance", "LOLC Life", "Fairfirst Insurance", "Sri Lanka Insurance", "Union Assurance", "Softlogic Life", "Amana Takaful", "Janashakthi"]
+categories = ["Motor Plus", "Health Cover", "Life Protector", "DTA Housing Loan", "Surgical Plan", "Third Party", "Comprehensive"]
+currency_symbols = ["Rs.", "LKR", "Rupees", "Rs"]
+taxes = ["VAT", "SSCL", "Cess", "Government Taxes"]
 
-COMPANIES = ["Aetna Health", "Blue Cross", "Cigna Corp", "UnitedHealthcare", "Humana Inc", "Kaiser Permanente", "Geico Insurance", "State Farm", "Progressive Corp", "Allstate Corp"]
-PREMIUMS = ["$120 per month", "$150/month", "$95/mo", "$230 monthly", "$1400 annually", "$1800 per year", "$85 per month", "$300/mo"]
-DEDUCTIBLES = ["$500 deductible", "$1,000 deductible", "$250 deductible", "$2000 deductible", "$0 deductible", "$1500 deductible"]
-COPAYS = ["20% copay", "10% copay", "$20 co-pay", "15% coinsurance", "30% copayment", "$35 copay"]
-
-# Sentence templates with entity markers
-TEMPLATES = [
-     "This policy is provided by {company} with a monthly premium of {premium}.",
-     "Under {company}, the deductible is {deductible} and the premium is {premium}.",
-     "With {company}, you have a {copay} and a {deductible}.",
-     "The {company} plan features a {premium} rate and {deductible} limit.",
-     "Your monthly payment to {company} is {premium} with a {copay} per visit.",
-     "For {company}, the annual premium is {premium} and the deductible is {deductible} with a {copay}.",
-     "A quote from {company} offers {deductible} and {copay} for doctor visits at {premium}."
+# Define complex sentence structures
+templates = [
+    "The total gross premium for the {category} policy by {company} is {currency} {premium} inclusive of {tax}.",
+    "{company} Quotation Summary: {category} - Net Premium: {premium} {currency} (Deductible: {currency} {deductible})",
+    "Subject to a {copay}% copayment, the {company} {category} requires a contribution of {currency} {premium}.",
+    "Single Premium Payable: {premium} {currency} | Company: {company} | Excess: {deductible}"
 ]
 
+def generate_bboxes(tokens):
+    """
+    Heuristic logic to generate normalized bounding boxes (0-1000 scale) for LayoutLM.
+    """
+    bboxes = []
+    left = 50
+    top = 100
+    line_height = 30
+    word_gap = 10
+    char_width = 8
+    
+    for token in tokens:
+        width = len(token) * char_width
+        right = left + width
+        
+        # Word wrapping if it exceeds the right margin (950)
+        if right > 950:
+            left = 50
+            top += line_height
+            right = left + width
+            
+        bottom = top + line_height
+        
+        # Ensure values don't exceed the 1000x1000 bounds
+        bboxes.append([
+            min(max(left, 0), 1000), 
+            min(max(top, 0), 1000), 
+            min(max(right, 0), 1000), 
+            min(max(bottom, 0), 1000)
+        ])
+        
+        # Move 'left' cursor for the next word
+        left = right + word_gap
+        
+    return bboxes
+
 def generate_sample():
-    company = random.choice(COMPANIES)
-    premium = random.choice(PREMIUMS)
-    deductible = random.choice(DEDUCTIBLES)
-    copay = random.choice(COPAYS)
+    template = random.choice(templates)
+    company = random.choice(companies)
+    category = random.choice(categories)
+    currency = random.choice(currency_symbols)
+    tax = random.choice(taxes)
     
-    template = random.choice(TEMPLATES)
-    
-    # We need to construct the sentence and keep track of character offsets/labels
-    # or token-level labels directly. To be simple and robust, let's build the words
-    # list and tag list word-by-word.
+    # Generate random numbers for financial values
+    premium = f"{random.randint(15, 300)},{random.choice(['000', '500', '250', '750'])}.00"
+    deductible = f"{random.randint(2, 25)},000"
+    copay = str(random.choice([10, 15, 20, 25]))
     
     words = []
     tags = []
     
-    # We can split the template and insert words and their tags
     parts = template.split()
     for part in parts:
-        clean_part = part.strip(".,;:?!")
-        # Find ending punctuation
-        punct = part[len(clean_part):] if len(clean_part) < len(part) else ""
+        strip_chars = ".,;:?!()[]%|"
         
+        # Strip prefix characters
+        prefix = ""
+        while len(part) > 0 and part[0] in strip_chars:
+            prefix += part[0]
+            part = part[1:]
+            
+        # Strip suffix characters
+        suffix_list = []
+        while len(part) > 0 and part[-1] in strip_chars:
+            suffix_list.append(part[-1])
+            part = part[:-1]
+        suffix = "".join(reversed(suffix_list))
+        
+        clean_part = part
+        
+        # Add prefix punctuation to tokens
+        if prefix:
+            for char in prefix:
+                words.append(char)
+                tags.append("O")
+                
+        # Process clean_part and map entity tags dynamically
         if clean_part == "{company}":
-            comp_words = company.split()
-            for idx, w in enumerate(comp_words):
+            val_tokens = company.replace(",", " , ").replace(".", " . ").split()
+            for idx, w in enumerate(val_tokens):
                 words.append(w)
                 tags.append("B-COMPANY" if idx == 0 else "I-COMPANY")
         elif clean_part == "{premium}":
-            prem_words = premium.split()
-            for idx, w in enumerate(prem_words):
+            val_tokens = premium.replace(",", " , ").replace(".", " . ").split()
+            for idx, w in enumerate(val_tokens):
                 words.append(w)
                 tags.append("B-PREMIUM" if idx == 0 else "I-PREMIUM")
         elif clean_part == "{deductible}":
-            ded_words = deductible.split()
-            for idx, w in enumerate(ded_words):
+            val_tokens = deductible.replace(",", " , ").replace(".", " . ").split()
+            for idx, w in enumerate(val_tokens):
                 words.append(w)
                 tags.append("B-DEDUCTIBLE" if idx == 0 else "I-DEDUCTIBLE")
         elif clean_part == "{copay}":
-            copay_words = copay.split()
-            for idx, w in enumerate(copay_words):
+            val_tokens = copay.replace(",", " , ").replace(".", " . ").split()
+            for idx, w in enumerate(val_tokens):
                 words.append(w)
                 tags.append("B-COPAY" if idx == 0 else "I-COPAY")
+        elif clean_part == "{category}":
+            val_tokens = category.replace(",", " , ").replace(".", " . ").split()
+            for w in val_tokens:
+                words.append(w)
+                tags.append("O")
+        elif clean_part == "{currency}":
+            val_tokens = currency.replace(",", " , ").replace(".", " . ").split()
+            for w in val_tokens:
+                words.append(w)
+                tags.append("O")
+        elif clean_part == "{tax}":
+            val_tokens = tax.replace(",", " , ").replace(".", " . ").split()
+            for w in val_tokens:
+                words.append(w)
+                tags.append("O")
         else:
-            words.append(clean_part)
-            tags.append("O")
-            
-        if punct:
-            words.append(punct)
-            tags.append("O")
-            
-    return {"tokens": words, "ner_tags": tags}
+            val_tokens = clean_part.replace(",", " , ").replace(".", " . ").split()
+            for w in val_tokens:
+                words.append(w)
+                tags.append("O")
+                
+        # Add suffix punctuation to tokens
+        if suffix:
+            for char in suffix:
+                words.append(char)
+                tags.append("O")
+                
+    return words, tags
 
-def main():
-    # Generate 100 training samples and 20 validation samples
-    train_data = [generate_sample() for _ in range(100)]
-    val_data = [generate_sample() for _ in range(20)]
+dataset = []
+
+# Generate 500 unique synthetic samples
+for _ in range(500):
+    tokens, tags = generate_sample()
     
-    with open("train_data.json", "w") as f:
-        json.dump(train_data, f, indent=2)
-        
-    with open("val_data.json", "w") as f:
-        json.dump(val_data, f, indent=2)
-        
-    print(f"Generated 100 training samples to train_data.json and 20 samples to val_data.json.")
+    # Generate heuristic bounding boxes
+    bboxes = generate_bboxes(tokens)
+    
+    dataset.append({
+        "tokens": tokens,
+        "ner_tags": tags,
+        "bboxes": bboxes
+    })
 
-if __name__ == "__main__":
-    main()
+# Save to your training file
+with open('train_data_augmented.json', 'w') as f:
+    json.dump(dataset, f, indent=4)
+
+print(f"Successfully generated {len(dataset)} insurance training samples with dynamic token-tag matching and heuristic bboxes!")
