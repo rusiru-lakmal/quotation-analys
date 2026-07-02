@@ -175,6 +175,11 @@ def detect_insurance_class(text1, text2):
     best_class = max(scores, key=scores.get)
     # Require a minimum score of 3 to classify
     if scores[best_class] >= 3:
+        if best_class == "life":
+            group_life_score = sum([2 if kw in combined else 0 for kw in ["group life", "group protect", "member list", "free cover limit", "fcl of", "active at work"]])
+            loan_score = sum([2 if kw in combined else 0 for kw in ["loan protection", "housing loan", "mortgage redemption", "decreasing term", "mrp std", "outstanding loan"]])
+            if group_life_score > loan_score:
+                return "group_life"
         return best_class
     return "general"
 
@@ -390,6 +395,117 @@ def extract_life_fields(text):
         m = re.search(r"Medical\s*:\s*(.*)", text, re.IGNORECASE)
     if m:
         data["medical_requirements"] = m.group(1).strip()
+        
+    return data
+
+def extract_group_life_fields(text):
+    text_clean = preprocess_pdf_text_spaces(text)
+    
+    data = {
+        "class": "group_life",
+        "insured_name": "Not found",
+        "basic_premium": "Not found",
+        "total_payable": "Not found",
+        "policy_fee": "LKR 0.00",
+        
+        # Group Life Benefits (Sum Assured)
+        "accidental_death_benefit": "Not found",
+        "tpd_benefit": "Not found",
+        "ppd_benefit": "Not found",
+        "critical_illness_cover": "Not found",
+        
+        # Group Life Premiums
+        "accidental_death_premium": "LKR 0.00",
+        "tpd_premium": "LKR 0.00",
+        "ppd_premium": "LKR 0.00",
+        "critical_illness_premium": "LKR 0.00",
+        
+        # Specifications
+        "fcl_limit": "Not found",
+        "medical_requirements": "Not found"
+    }
+    
+    # 1. Proposer / Insured Name
+    m = re.search(r"(?:PROPOSER|Insured’s\s+Name|Insured's\s+Name)\s*:\s*(.*)", text_clean, re.IGNORECASE)
+    if m:
+        data["insured_name"] = m.group(1).strip()
+        
+    # 2. Total Payable Premium
+    m = re.search(r"Total\s+Annual\s+Premium\s*(?:Rs\.?|LKR)?\s*([\d,]+(?:\.\d+)?)", text_clean, re.IGNORECASE)
+    if not m:
+        m = re.search(r"Annual\s+Premium\s*:\s*(?:Rs\.?|LKR)?\s*([\d,]+(?:\.\d+)?)", text_clean, re.IGNORECASE)
+    if not m:
+        m = re.search(r"member\s+list\s+([\d,]+\.\d+)", text_clean, re.IGNORECASE)
+    if m:
+        data["total_payable"] = "LKR " + m.group(1).strip()
+        
+    # 3. Basic / Primary Life Premium
+    m = re.search(r"Primary\s+Life\s+Cover\s+“As\s+per\s+the\s+schedule”\s*(?:Rs\.?|LKR)?\s*([\d,]+(?:\.\d+)?)", text_clean, re.IGNORECASE)
+    if m:
+        data["basic_premium"] = "LKR " + m.group(1).strip()
+    else:
+        if "basic life cover" in text_clean.lower():
+            data["basic_premium"] = "As per member list"
+            
+    # 4. ADB
+    adb_double = re.search(r"Accidental\s+Death\s+Benefit(?:\s*\(ADB\))?\s*(?:Rs\.?|LKR)?\s*([\d,]+\.\d+)\s+(?:Rs\.?|LKR)?\s*([\d,]+\.\d+)", text_clean, re.IGNORECASE)
+    if adb_double:
+        data["accidental_death_benefit"] = "LKR " + adb_double.group(1).strip()
+        data["accidental_death_premium"] = "LKR " + adb_double.group(2).strip()
+    else:
+        adb_single = re.search(r"Accidental\s+Death\s+Benefit(?:\s*\(ADB\))?\s*(?:EMPLOYEE\s+ONLY)?\s*(?:Rs\.?|LKR)?\s*([\d,]+\.\d+)", text_clean, re.IGNORECASE)
+        if adb_single:
+            data["accidental_death_benefit"] = "LKR " + adb_single.group(1).strip()
+            
+    # 5. TPD
+    tpd_double = re.search(r"Total\s+and\s+Permanent\s+Disability\s*\(TPS\)\s*(?:\(due\s+to\s+accidental/sickness\))?\s*(?:Rs\.?|LKR)?\s*([\d,]+\.\d+)\s+(?:Rs\.?|LKR)?\s*([\d,]+\.\d+)", text_clean, re.IGNORECASE)
+    if tpd_double:
+        data["tpd_benefit"] = "LKR " + tpd_double.group(1).strip()
+        data["tpd_premium"] = "LKR " + tpd_double.group(2).strip()
+    else:
+        tpd_single = re.search(r"TOTAL\s+PERMANENT\s+DISABILITY\s*(?:EMPLOYEE\s+ONLY)?\s*(?:Rs\.?|LKR)?\s*([\d,]+\.\d+)", text_clean, re.IGNORECASE)
+        if tpd_single:
+            data["tpd_benefit"] = "LKR " + tpd_single.group(1).strip()
+            
+    # 6. PPD
+    ppd_double = re.search(r"(?:Permanent\s+Partial\s+Disability\s*\(EPD\)|Partial\s+Permanent\s+Disability)\s*(?:\(Due\s+to\s+accident\s+only\))?\s*(?:Rs\.?|LKR)?\s*([\d,]+\.\d+)\s+(?:Rs\.?|LKR)?\s*([\d,]+\.\d+)", text_clean, re.IGNORECASE)
+    if ppd_double:
+        data["ppd_benefit"] = "LKR " + ppd_double.group(1).strip()
+        data["ppd_premium"] = "LKR " + ppd_double.group(2).strip()
+    else:
+        ppd_single = re.search(r"(?:PARTIAL\s+PERMANENT\s+DISABILITY|Permanent\s+Partial\s+Disability\s*\(EPD\))\s*(?:EMPLOYEE\s+ONLY)?\s*(?:Rs\.?|LKR)?\s*([\d,]+\.\d+)", text_clean, re.IGNORECASE)
+        if ppd_single:
+            data["ppd_benefit"] = "LKR " + ppd_single.group(1).strip()
+            
+    # 7. CIC
+    cic_double = re.search(r"Critical\s+illness\s+Cover\s*(?:\(\d+\s+illness\))?\s*(?:Rs\.?|LKR)?\s*([\d,]+\.\d+)\s+(?:Rs\.?|LKR)?\s*([\d,]+\.\d+)", text_clean, re.IGNORECASE)
+    if cic_double:
+        data["critical_illness_cover"] = "LKR " + cic_double.group(1).strip()
+        data["critical_illness_premium"] = "LKR " + cic_double.group(2).strip()
+    else:
+        cic_single = re.search(r"CRITICAL\s+ILLNESS\s+COVER\s*(?:EMPLOYEE\s+ONLY)?\s*(?:Rs\.?|LKR)?\s*([\d,]+\.\d+)", text_clean, re.IGNORECASE)
+        if cic_single:
+            data["critical_illness_cover"] = "LKR " + cic_single.group(1).strip()
+            
+    # 8. Free Cover Limit (FCL)
+    m = re.search(r"NON-MEDICAL\s+LIMIT\s*\(FREE\s+COVER\s+LIMIT\)\s*LIFE\s*(LKR\s*[\d,]+\.\d+\s*&\s*CIC\s*[\d,]+\.\d+|LKR\s*[\d,]+\.\d+)", text_clean, re.IGNORECASE)
+    if m:
+        data["fcl_limit"] = m.group(1).strip()
+    else:
+        # Check Union FCL format with condition groups
+        m = re.search(r"Free\s+Cover\s+Limit\s*\(FCL\)\s*of\s*(.*?)(?:,\s*[a-z]\.\))", text_clean, re.IGNORECASE)
+        if m:
+            data["fcl_limit"] = m.group(1).strip()
+        else:
+            m = re.search(r"(?:Free\s+Cover\s+Limit|FCL)\s*(?:\(FCL\))?\s*(?:of|is)?\s*(Rs\.?|LKR)?\s*([\d,]+[^.\n]*)", text_clean, re.IGNORECASE)
+            if m:
+                data["fcl_limit"] = ((m.group(1) or "") + " " + m.group(2).strip()).strip(".,/- ")
+            
+    # 9. Medical requirements
+    if "medical evidence" in text_clean.lower() or "medical requirements" in text_clean.lower() or "medically underwritten" in text_clean.lower() or "underwritten" in text_clean.lower():
+        data["medical_requirements"] = "Required above Free Cover Limit (FCL)"
+    else:
+        data["medical_requirements"] = "Not required under Free Cover Limit"
         
     return data
 
@@ -802,6 +918,8 @@ def get_combined_quote_data(text, model_path, ins_class="health", pdf_path=None)
         combined = extract_motor_fields(text)
     elif ins_class == "life":
         combined = extract_life_fields(text)
+    elif ins_class == "group_life":
+        combined = extract_group_life_fields(text)
     else:
         combined = extract_rich_fields(text, ins_class, pdf_path)
         
@@ -969,6 +1087,23 @@ def evaluate_suitability(quotes, ins_class):
             if "not required" in med:
                 score += 5
                 reasons.append("Hassle-free application (No medical tests required)")
+        elif ins_class == "group_life":
+            adb = q.get("accidental_death_benefit", "Not found").lower()
+            if "not found" not in adb and "0.00" not in adb:
+                score += 8
+                reasons.append("Includes Accidental Death Benefit (ADB) cover")
+            tpd = q.get("tpd_benefit", "Not found").lower()
+            if "not found" not in tpd and "0.00" not in tpd:
+                score += 8
+                reasons.append("Includes Total Permanent Disability (TPD) cover")
+            ppd = q.get("ppd_benefit", "Not found").lower()
+            if "not found" not in ppd and "0.00" not in ppd:
+                score += 8
+                reasons.append("Includes Permanent Partial Disability (PPD) cover")
+            cic = q.get("critical_illness_cover", "Not found").lower()
+            if "not found" not in cic and "0.00" not in cic:
+                score += 8
+                reasons.append("Includes Critical Illness (CIC) cover")
                 
         # Calculate grade
         if score >= 75:
@@ -1074,7 +1209,9 @@ def generate_comparison_html(quotes, output_path):
         "towing_limit", "natural_disasters", "airbag_replacement", 
         "windscreen_cover", "opd_limit", "spectacles_limit", "vehicle_make_model",
         "suitability_score", "suitability_reasons", "is_best_pick", "recommendation_tag", "source_file",
-        "repayment_period", "interest_rate", "tpd_benefit", "death_benefit", "medical_requirements"
+        "repayment_period", "interest_rate", "tpd_benefit", "death_benefit", "medical_requirements",
+        "accidental_death_benefit", "accidental_death_premium", "tpd_premium", "ppd_benefit", "ppd_premium",
+        "critical_illness_cover", "critical_illness_premium", "fcl_limit"
     ]
     
     for k in all_keys:
@@ -1200,6 +1337,28 @@ def generate_comparison_html(quotes, output_path):
         ]
         
         for key, label in life_benefits:
+            rows_html += f'<tr><td class="param-name">{label}</td>'
+            for q in quotes:
+                rows_html += f'<td>{q.get(key, "Not found")}</td>'
+            rows_html += "</tr>"
+            
+    elif ins_class == "group_life":
+        rows_html += f'<tr class="section-header"><td colspan="{len(quotes) + 1}">Group Life Benefits & Specifications</td></tr>'
+        
+        group_life_benefits = [
+            ("accidental_death_benefit", "Accidental Death Benefit (ADB) Sum Assured"),
+            ("accidental_death_premium", "Accidental Death Premium"),
+            ("tpd_benefit", "Total Permanent Disability (TPD) Sum Assured"),
+            ("tpd_premium", "TPD Premium"),
+            ("ppd_benefit", "Permanent Partial Disability (PPD) Sum Assured"),
+            ("ppd_premium", "PPD Premium"),
+            ("critical_illness_cover", "Critical Illness Cover (CIC) Sum Assured"),
+            ("critical_illness_premium", "Critical Illness Premium"),
+            ("fcl_limit", "Free Cover Limit (FCL)"),
+            ("medical_requirements", "Underwriting Medical Requirements")
+        ]
+        
+        for key, label in group_life_benefits:
             rows_html += f'<tr><td class="param-name">{label}</td>'
             for q in quotes:
                 rows_html += f'<td>{q.get(key, "Not found")}</td>'
