@@ -921,17 +921,40 @@ def extract_dynamic_parameters(text):
                     
     return params
 
+class BaseParser:
+    def parse(self, text, pdf_path=None):
+        raise NotImplementedError("Subclasses must implement parse method")
+
+class GroupLifeParser(BaseParser):
+    def parse(self, text, pdf_path=None):
+        return extract_group_life_fields(text)
+
+class MotorParser(BaseParser):
+    def parse(self, text, pdf_path=None):
+        return extract_motor_fields(text)
+
+class HealthParser(BaseParser):
+    def parse(self, text, pdf_path=None):
+        return extract_rich_fields(text, "health", pdf_path)
+
+class GeneralParser(BaseParser):
+    def parse(self, text, pdf_path=None):
+        return extract_rich_fields(text, "general", pdf_path)
+
+def get_parser(doc_class):
+    parsers = {
+        "group_life": GroupLifeParser(),
+        "motor": MotorParser(),
+        "health": HealthParser(),
+        "life": GroupLifeParser()
+    }
+    return parsers.get(doc_class, GeneralParser())
+
 def get_combined_quote_data(text, model_path, ins_class="health", pdf_path=None):
     ml_data = extract_entities(text, model_path)
     
-    if ins_class == "motor":
-        combined = extract_motor_fields(text)
-    elif ins_class == "life":
-        combined = extract_life_fields(text)
-    elif ins_class == "group_life":
-        combined = extract_group_life_fields(text)
-    else:
-        combined = extract_rich_fields(text, ins_class, pdf_path)
+    parser = get_parser(ins_class)
+    combined = parser.parse(text, pdf_path)
         
     combined["company"] = ml_data["company"]
     

@@ -6,7 +6,7 @@ from transformers import LayoutLMv3Processor, LayoutLMv3ForTokenClassification, 
 from datasets import Dataset as HFDataset
 
 # 1. Define label mappings
-LABEL_LIST = ["O", "B-COMPANY", "I-COMPANY", "B-PREMIUM", "I-PREMIUM", "B-DEDUCTIBLE", "I-DEDUCTIBLE", "B-COPAY", "I-COPAY"]
+LABEL_LIST = ["O", "B-ATTRIBUTE_NAME", "I-ATTRIBUTE_NAME", "B-ATTRIBUTE_LIMIT", "I-ATTRIBUTE_LIMIT", "B-ATTRIBUTE_PREMIUM", "I-ATTRIBUTE_PREMIUM"]
 id2label = {v: k for v, k in enumerate(LABEL_LIST)}
 label2id = {k: v for v, k in enumerate(LABEL_LIST)}
 
