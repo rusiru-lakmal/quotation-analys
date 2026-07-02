@@ -15,12 +15,22 @@ export class QuotationService {
     @InjectModel(Quotation.name) private quotationModel: Model<Quotation>,
   ) {}
 
-  async processPdfAndCompare(filePath: string): Promise<any> {
+  async processPdfAndCompare(file: any): Promise<any> {
     try {
-      const absoluteFilePath = path.resolve(filePath);
-      
-      // Determine workspace directory (one folder up from src/..)
       const workspaceDir = path.resolve(__dirname, '../../../');
+      const uploadsDir = path.join(workspaceDir, 'uploads');
+
+      // Create uploads directory if not exists
+      if (!fs.existsSync(uploadsDir)) {
+        fs.mkdirSync(uploadsDir, { recursive: true });
+      }
+
+      const filePath = path.join(uploadsDir, file.originalname || 'uploaded_quotation.pdf');
+      
+      // Write the uploaded buffer payload to temp file
+      fs.writeFileSync(filePath, file.buffer);
+      
+      const absoluteFilePath = path.resolve(filePath);
       
       // Run Python AI Extraction Pipeline
       // We pass the file path as an argument to infer_and_compare.py
@@ -32,9 +42,6 @@ export class QuotationService {
       }
 
       // Try to parse stdout to JSON.
-      // If the python script prints logs, we might need to handle extracting the JSON part.
-      // A safe way is to find the last line containing json, or write a dedicated flag inside python.
-      // But typically stdout has the json print at the end.
       let extractedData: any;
       try {
         extractedData = JSON.parse(stdout);

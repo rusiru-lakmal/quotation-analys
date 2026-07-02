@@ -1,13 +1,16 @@
-import { Controller, Post, Body, Get, Put, Param } from '@nestjs/common';
+import { Controller, Post, Body, Get, Put, Param, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { QuotationService } from './quotation.service';
 
-@Controller('quotation')
+@Controller('api/v1/quotations')
 export class QuotationController {
   constructor(private readonly quotationService: QuotationService) {}
 
+  // 1. Upload PDF and process via Python Engine
   @Post('process')
-  async processPdf(@Body('filePath') filePath: string) {
-    return this.quotationService.processPdfAndCompare(filePath);
+  @UseInterceptors(FileInterceptor('file'))
+  async processQuotation(@UploadedFile() file: any) {
+    return this.quotationService.processPdfAndCompare(file);
   }
 
   @Get()
@@ -15,10 +18,11 @@ export class QuotationController {
     return this.quotationService.getAllQuotations();
   }
 
+  // 2. Submit corrections and retrain LayoutLM
   @Put(':id/correct')
-  async correctAndRetrain(
+  async submitCorrection(
     @Param('id') id: string,
-    @Body('correctedData') correctedData: any,
+    @Body() correctedData: any,
   ) {
     return this.quotationService.correctAndRetrain(id, correctedData);
   }

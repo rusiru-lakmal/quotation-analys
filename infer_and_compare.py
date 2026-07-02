@@ -1678,6 +1678,24 @@ def generate_comparison_html(quotes, output_path):
         f.write(html_content)
 
 def main():
+    import sys
+    # Handle single file processing via command-line argument for API integration
+    if len(sys.argv) > 1:
+        pdf_path = sys.argv[1]
+        if not os.path.exists(pdf_path):
+            print(json.dumps({"error": f"File not found: {pdf_path}"}))
+            return
+            
+        text = extract_text_from_pdf(pdf_path)
+        ins_class = detect_insurance_class(text, "")
+        
+        model_path = "./model_output"
+        extracted = get_combined_quote_data(text, model_path, ins_class, pdf_path=pdf_path)
+        
+        # Output ONLY the clean JSON result to stdout
+        print(json.dumps(extracted, indent=2))
+        return
+
     # Dynamically find PDF files inside quotations folder
     pdf_files = []
     if os.path.exists("quotations"):

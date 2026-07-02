@@ -60,10 +60,16 @@ let QuotationService = class QuotationService {
     constructor(quotationModel) {
         this.quotationModel = quotationModel;
     }
-    async processPdfAndCompare(filePath) {
+    async processPdfAndCompare(file) {
         try {
-            const absoluteFilePath = path.resolve(filePath);
             const workspaceDir = path.resolve(__dirname, '../../../');
+            const uploadsDir = path.join(workspaceDir, 'uploads');
+            if (!fs.existsSync(uploadsDir)) {
+                fs.mkdirSync(uploadsDir, { recursive: true });
+            }
+            const filePath = path.join(uploadsDir, file.originalname || 'uploaded_quotation.pdf');
+            fs.writeFileSync(filePath, file.buffer);
+            const absoluteFilePath = path.resolve(filePath);
             const command = `python3 infer_and_compare.py "${absoluteFilePath}"`;
             const { stdout, stderr } = await execAsync(command, { cwd: workspaceDir });
             if (stderr) {

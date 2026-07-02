@@ -18,7 +18,7 @@ exports.AppModule = AppModule;
 exports.AppModule = AppModule = __decorate([
     (0, common_1.Module)({
         imports: [
-            mongoose_1.MongooseModule.forRoot('mongodb://localhost:27017/tryai'),
+            mongoose_1.MongooseModule.forRoot('mongodb://admin:supersecretpassword@localhost:27017/quotation_ai?authSource=admin'),
             quotation_module_1.QuotationModule,
         ],
         controllers: [app_controller_1.AppController],

@@ -14,30 +14,32 @@ var __param = (this && this.__param) || function (paramIndex, decorator) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.QuotationController = void 0;
 const common_1 = require("@nestjs/common");
+const platform_express_1 = require("@nestjs/platform-express");
 const quotation_service_1 = require("./quotation.service");
 let QuotationController = class QuotationController {
     quotationService;
     constructor(quotationService) {
         this.quotationService = quotationService;
     }
-    async processPdf(filePath) {
-        return this.quotationService.processPdfAndCompare(filePath);
+    async processQuotation(file) {
+        return this.quotationService.processPdfAndCompare(file);
     }
     async getQuotations() {
         return this.quotationService.getAllQuotations();
     }
-    async correctAndRetrain(id, correctedData) {
+    async submitCorrection(id, correctedData) {
         return this.quotationService.correctAndRetrain(id, correctedData);
     }
 };
 exports.QuotationController = QuotationController;
 __decorate([
     (0, common_1.Post)('process'),
-    __param(0, (0, common_1.Body)('filePath')),
+    (0, common_1.UseInterceptors)((0, platform_express_1.FileInterceptor)('file')),
+    __param(0, (0, common_1.UploadedFile)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [String]),
+    __metadata("design:paramtypes", [Object]),
     __metadata("design:returntype", Promise)
-], QuotationController.prototype, "processPdf", null);
+], QuotationController.prototype, "processQuotation", null);
 __decorate([
     (0, common_1.Get)(),
     __metadata("design:type", Function),
@@ -47,13 +49,13 @@ __decorate([
 __decorate([
     (0, common_1.Put)(':id/correct'),
     __param(0, (0, common_1.Param)('id')),
-    __param(1, (0, common_1.Body)('correctedData')),
+    __param(1, (0, common_1.Body)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [String, Object]),
     __metadata("design:returntype", Promise)
-], QuotationController.prototype, "correctAndRetrain", null);
+], QuotationController.prototype, "submitCorrection", null);
 exports.QuotationController = QuotationController = __decorate([
-    (0, common_1.Controller)('quotation'),
+    (0, common_1.Controller)('api/v1/quotations'),
     __metadata("design:paramtypes", [quotation_service_1.QuotationService])
 ], QuotationController);
 //# sourceMappingURL=quotation.controller.js.map

@@ -11,3 +11,9 @@ model_output/
 model_output_layoutlm/
 results/
 layoutlmv3-insurance-results/
+
+# Temporary and local outputs
+uploads/
+custom_comparison_report.html
+backend/node_modules/
+backend/dist/

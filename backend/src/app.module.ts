@@ -6,7 +6,7 @@ import { QuotationModule } from './quotation/quotation.module';
 
 @Module({
   imports: [
-    MongooseModule.forRoot('mongodb://localhost:27017/tryai'),
+    MongooseModule.forRoot('mongodb://admin:supersecretpassword@localhost:27017/quotation_ai?authSource=admin'),
     QuotationModule,
   ],
   controllers: [AppController],
