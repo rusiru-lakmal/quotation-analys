@@ -524,128 +524,282 @@ def extract_plans_dynamically(pdf_path):
         return []
     import pdfplumber
     import re
+    
+    # Keywords that define the MAIN ANNUAL LIMIT row (only these can write the limit)
+    # Hospitalization/surgical limits are PREFERRED over life cover
+    HOSP_LIMIT_KEYWORDS = [
+        "any one event", "any year limit", "annual limit", "annual inpatient benefit",
+        "hospitalisation cover", "hospitalization cover", "sum insured", "inpatient cover",
+        "surgical limit", "event limit",
+    ]
+    LIFE_LIMIT_KEYWORDS = ["life cover", "sum assured"]
+    MAIN_LIMIT_KEYWORDS = HOSP_LIMIT_KEYWORDS + LIFE_LIMIT_KEYWORDS
+    
+    # Keywords for sub-benefit rows that should NEVER overwrite the main limit
+    SUB_BENEFIT_KEYWORDS = [
+        "ambulance", "emergency travelling", "lens kit", "cataract",
+        "spectacles", "government hospital per day", "opd", "outpatient",
+        "consultant", "surgeon", "anesthetist", "pharmacy", "drug",
+        "birth of twin", "cash grant", "maternity", "dental",
+        "day surgery", "physiotherapy", "ayurvedic", "room charge",
+        "inpatient benefit", "childbirth", "child birth", "government hospital",
+        "per day", "travelling allowance", "other benefit", "fringe benefit",
+        "[01]", "[02]", "[03]", "[04]", "[05]", "[06]", "[07]", "[08]",
+    ]
+    
+    def _merge_row_words(row_words):
+        """Sort and merge words that are touching/overlapping horizontally."""
+        row_words.sort(key=lambda w: w["x0"])
+        merged = []
+        for w in row_words:
+            if not merged:
+                merged.append(dict(w))
+            else:
+                prev = merged[-1]
+                if w["x0"] - prev["x1"] < 6:
+                    prev["text"] += w["text"]
+                    prev["x1"] = w["x1"]
+                else:
+                    merged.append(dict(w))
+        return merged
+    
+    def _group_into_rows(words, y_tol=3):
+        rows = {}
+        for w in words:
+            matched = False
+            for top_val in rows.keys():
+                if abs(w["top"] - top_val) <= y_tol:
+                    rows[top_val].append(w)
+                    matched = True
+                    break
+            if not matched:
+                rows[w["top"]] = [w]
+        return rows
+    
+    def _is_monetary_value(val):
+        """Returns True if val looks like a currency amount."""
+        v = val.replace(",", "").replace(".", "").replace("LKR", "").replace("Rs", "").strip()
+        return bool(re.match(r"^\d+$", v)) and len(v) >= 3
+    
     try:
         with pdfplumber.open(pdf_path) as pdf:
-            page = pdf.pages[0]
-            words = page.extract_words()
-            
-            # Find PLAN or OPTION column headers
-            header_words = []
-            for w in words:
-                if w["text"].upper() == "PLAN" or w["text"].upper() == "OPTION":
-                    header_words.append(w)
-                    
-            if not header_words:
-                return []
-                
-            # Group headers by vertical 'top' coordinate (tolerance of 3)
-            header_groups = {}
-            for h in header_words:
-                matched = False
-                for top_val in header_groups.keys():
-                    if abs(h["top"] - top_val) <= 3:
-                        header_groups[top_val].append(h)
-                        matched = True
-                        break
-                if not matched:
-                    header_groups[h["top"]] = [h]
-                    
-            # Find the group with the most columns
-            best_top = max(header_groups.keys(), key=lambda k: len(header_groups[k]))
-            cols = sorted(header_groups[best_top], key=lambda w: w["x0"])
-            plan_xs = [c["x0"] for c in cols]
-            plan_names = [f"Plan 0{i+1}" for i in range(len(cols))]
-            
-            # Initialize plans dict
             plans_data = []
-            for i, name in enumerate(plan_names):
-                plans_data.append({
-                    "name": name,
-                    "limit": "Not found",
-                    "ind_prem": "Not found",
-                    "fam_prem": "Not found",
-                    "ind_count": "0",
-                    "fam_count": "0"
-                })
-                
-            # Group all words into lines by vertical coordinate
-            rows = {}
-            for w in words:
-                matched = False
-                for top_val in rows.keys():
-                    if abs(w["top"] - top_val) <= 3:
-                        rows[top_val].append(w)
-                        matched = True
-                        break
-                if not matched:
-                    rows[w["top"]] = [w]
-                    
-            # Sort words in each row left-to-right
-            for top_val in rows.keys():
-                rows[top_val].sort(key=lambda w: w["x0"])
-                
-            # Parse each row
-            min_plan_x = min(plan_xs)
-            for top_val in sorted(rows.keys()):
-                row_words = rows[top_val]
-                
-                # Extract label (words on the left)
-                label_words = [w for w in row_words if w["x0"] < min_plan_x - 10]
-                label = " ".join([w["text"] for w in label_words]).strip()
-                
-                if not label:
+            plan_xs = []          # Column X positions (from first page with headers)
+            plan_col_names = []   # Normalized plan names per column position
+            
+            for page_idx, page in enumerate(pdf.pages):
+                words = page.extract_words()
+                if not words:
                     continue
-                    
-                # Extract numbers on the right
-                val_words = [w for w in row_words if w["x0"] >= min_plan_x - 10]
                 
-                # Map each value word to the closest plan column
-                mapped = {}
-                for vw in val_words:
-                    txt = vw["text"].strip()
-                    # Skip words that are not numbers/currencies/limits (e.g. header texts or dash symbols)
-                    if txt in ["-", "PLAN", "PLAN:", "OPTION", "1", "2", "3", "4", "5"]:
-                        continue
-                    # Find closest column
-                    closest_idx = min(range(len(plan_xs)), key=lambda idx: abs(vw["x0"] - plan_xs[idx]))
-                    # Check if it's actually close horizontally (say within 35 pixels)
-                    if abs(vw["x0"] - plan_xs[closest_idx]) < 35:
-                        mapped[closest_idx] = txt
+                # Build rows for this page
+                raw_rows = _group_into_rows(words)
+                rows = {}
+                for top_val, row_words in raw_rows.items():
+                    rows[top_val] = _merge_row_words(row_words)
+                
+                # Collect merged word list for header detection
+                merged_page_words = []
+                for top_val in sorted(rows.keys()):
+                    merged_page_words.extend(rows[top_val])
+                
+                # Find PLAN/OPTION column headers on this page
+                header_words_page = []
+                for w in merged_page_words:
+                    txt_upper = w["text"].upper()
+                    if txt_upper.startswith("PLAN") or txt_upper.startswith("OPTION"):
+                        header_words_page.append(w)
+                
+                if header_words_page:
+                    hg = {}
+                    for h in header_words_page:
+                        matched = False
+                        for top_val in hg.keys():
+                            if abs(h["top"] - top_val) <= 3:
+                                hg[top_val].append(h)
+                                matched = True
+                                break
+                        if not matched:
+                            hg[h["top"]] = [h]
+                    
+                    best_top = max(hg.keys(), key=lambda k: len(hg[k]))
+                    page_cols = sorted(hg[best_top], key=lambda w: w["x0"])
+                    
+                    if page_idx == 0 or not plan_xs:
+                        # Establish column positions from first header page
+                        plan_xs = [c["x0"] for c in page_cols]
+                        plan_col_names = []
+                        for i, c in enumerate(page_cols):
+                            raw = c["text"].strip()
+                            # Normalize: "Plan01" → "Plan 01", "PlanA" → "Plan A"
+                            m = re.match(r"(Plan|Option)\s?([A-Z]?)(\d+)", raw, re.IGNORECASE)
+                            if m:
+                                letter = m.group(2) or ""
+                                num = m.group(3)
+                                if letter:
+                                    norm = f"{m.group(1)} {letter}"
+                                else:
+                                    norm = f"Plan {int(num):02d}"
+                            else:
+                                m2 = re.match(r"(Plan|Option)\s?([A-Z]+)", raw, re.IGNORECASE)
+                                if m2:
+                                    norm = f"{m2.group(1)} {m2.group(2)}"
+                                else:
+                                    norm = f"Plan {i+1:02d}"
+                            plan_col_names.append(norm)
                         
-                if not mapped:
+                        # Initialize plans_data from column names
+                        for norm in plan_col_names:
+                            if not any(p["name"] == norm for p in plans_data):
+                                plans_data.append({
+                                    "name": norm,
+                                    "limit": "Not found",
+                                    "ind_prem": "Not found",
+                                    "fam_prem": "Not found",
+                                    "ind_count": "0",
+                                    "fam_count": "0"
+                                })
+                    else:
+                        # On subsequent pages, register any NEW plan columns (e.g. Plan F)
+                        for c in page_cols:
+                            raw = c["text"].strip()
+                            m = re.match(r"(Plan|Option)\s?([A-Z]?)(\d+)", raw, re.IGNORECASE)
+                            if m:
+                                letter = m.group(2) or ""
+                                num = m.group(3)
+                                norm = f"{m.group(1)} {letter}" if letter else f"Plan {int(num):02d}"
+                            else:
+                                m2 = re.match(r"(Plan|Option)\s?([A-Z]+)", raw, re.IGNORECASE)
+                                norm = f"{m2.group(1)} {m2.group(2)}" if m2 else raw
+                            if not any(p["name"] == norm for p in plans_data):
+                                plans_data.append({
+                                    "name": norm,
+                                    "limit": "Not found",
+                                    "ind_prem": "Not found",
+                                    "fam_prem": "Not found",
+                                    "ind_count": "0",
+                                    "fam_count": "0"
+                                })
+                
+                if not plan_xs:
                     continue
-                    
-                label_lower = label.lower()
                 
-                # Check if this row is a Limit, Premium, or Count row
-                is_limit = "limit" in label_lower or "sum insured" in label_lower
-                is_ind = "individual" in label_lower or "ind" in label_lower or "single" in label_lower
-                is_fam = "family" in label_lower or "fam" in label_lower
-                is_premium = "premium" in label_lower or "rate" in label_lower or "ward" in label_lower
+                min_plan_x = min(plan_xs)
+                current_section = "limit" if page_idx == 0 else "limit"
                 
-                for idx, val in mapped.items():
-                    # Format premium/limit values
-                    cleaned_val = val
-                    if not cleaned_val.startswith("LKR") and not cleaned_val.startswith("Rs"):
-                        # Check if it's a number and format it
-                        val_clean = cleaned_val.replace(",", "")
-                        if re.match(r"^\d+(?:\.\d+)?$", val_clean):
-                            if float(val_clean) > 1000:
-                                cleaned_val = "LKR " + cleaned_val
+                for top_val in sorted(rows.keys()):
+                    row_words = rows[top_val]
+                    label_words = [w for w in row_words if w["x0"] < min_plan_x - 10]
+                    label = " ".join([w["text"] for w in label_words]).strip()
+                    if not label:
+                        continue
                     
-                    if is_limit and not is_premium:
-                        plans_data[idx]["limit"] = cleaned_val
-                    elif is_premium:
-                        if is_ind:
-                            plans_data[idx]["ind_prem"] = cleaned_val
-                        elif is_fam:
-                            plans_data[idx]["fam_prem"] = cleaned_val
-                    elif "number of employees" not in label_lower:
-                        if is_ind:
-                            plans_data[idx]["ind_count"] = cleaned_val
-                        elif is_fam:
-                            plans_data[idx]["fam_count"] = cleaned_val
+                    label_lower = label.lower()
+                    lns = label_lower.replace(" ", "")  # no-space version
+                    
+                    # ---- Section State Transitions ----
+                    # is_no_of: True only when the label STARTS with "No of"/"No of Individuals" etc.
+                    # NOT when "no of" is embedded deep in a label like "Per Family Unit (Emp, Spouse & Any No of Children)"
+                    is_no_of_leading = (
+                        label_lower.startswith("no of") or
+                        lns.startswith("noof") or
+                        "number of employees" in label_lower or
+                        "number of individuals" in label_lower or
+                        "no of employees" in label_lower or
+                        "no of individuals" in label_lower or
+                        "no of family" in label_lower
+                    )
+                    is_per_individual = ("per individual" in label_lower or lns.startswith("perindividual"))
+                    is_per_family = ("per family" in label_lower or lns.startswith("perfamily"))
+                    
+                    if "annual premium" in label_lower or "premium rate" in label_lower or "monthly premium" in label_lower or "quarterly premium" in label_lower or is_per_individual or is_per_family:
+                        if is_no_of_leading:
+                            current_section = "count"
+                        else:
+                            current_section = "premium"
+                    
+                    if is_no_of_leading and "premium" not in label_lower:
+                        current_section = "count"
+                    elif "premium calculation" in label_lower or label_lower.startswith("number of employees") or label_lower.startswith("no of employees"):
+                        current_section = "count"
+                    elif "total annual premium" in label_lower or "total premium" in label_lower or "net premium" in label_lower:
+                        current_section = "total"
+                    elif any(kw in label_lower for kw in MAIN_LIMIT_KEYWORDS):
+                        current_section = "limit"
+                    
+                    # Extract values on the right side
+                    val_words = [w for w in row_words if w["x0"] >= min_plan_x - 10]
+                    mapped = {}
+                    for vw in val_words:
+                        txt = vw["text"].strip()
+                        if txt in ["-", "PLAN", "PLAN:", "OPTION", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"]:
+                            continue
+                        # Skip plan header name cells
+                        if re.match(r'^(Plan|Option)\s?[A-Z0-9]+$', txt, re.IGNORECASE):
+                            continue
+                        closest_idx = min(range(len(plan_xs)), key=lambda idx: abs(vw["x0"] - plan_xs[idx]))
+                        if abs(vw["x0"] - plan_xs[closest_idx]) < 35:
+                            mapped[closest_idx] = txt
+                    
+                    if not mapped:
+                        continue
+                    
+                    is_ind = ("individual" in label_lower or is_per_individual or lns.startswith("noofindividual"))
+                    is_fam = ("family" in label_lower and not is_ind) or is_per_family or lns.startswith("nooffamily")
+                    is_sub_benefit = any(kw in label_lower for kw in SUB_BENEFIT_KEYWORDS)
+                    is_hosp_limit = any(kw in label_lower for kw in HOSP_LIMIT_KEYWORDS)
+                    is_life_limit = any(kw in label_lower for kw in LIFE_LIMIT_KEYWORDS)
+                    is_main_limit_row = is_hosp_limit or is_life_limit
+                    
+                    for local_idx, val in mapped.items():
+                        if local_idx >= len(plan_xs):
+                            continue
+                        # Map local column index to the global plans_data index
+                        col_name = plan_col_names[local_idx] if local_idx < len(plan_col_names) else None
+                        global_idx = next((i for i, p in enumerate(plans_data) if p["name"] == col_name), local_idx)
+                        if global_idx >= len(plans_data):
+                            continue
+                        
+                        cleaned_val = val
+                        if not cleaned_val.startswith("LKR") and not cleaned_val.startswith("Rs"):
+                            val_clean = cleaned_val.replace(",", "")
+                            if re.match(r"^\d+(?:\.\d+)?$", val_clean):
+                                if float(val_clean) > 1000:
+                                    cleaned_val = "LKR " + cleaned_val
+                        
+                        if current_section == "limit":
+                            # Skip sub-benefit rows (they're not the main coverage limit)
+                            if is_sub_benefit and not is_main_limit_row:
+                                continue
+                            # Skip plan-name or "Up to the limit" text values
+                            if re.match(r'^(Plan|Option)', cleaned_val, re.IGNORECASE):
+                                continue
+                            val_nospace = cleaned_val.lower().replace(" ", "")
+                            if "uptothelimit" in val_nospace or not _is_monetary_value(cleaned_val):
+                                continue
                             
+                            current_limit = plans_data[global_idx]["limit"]
+                            if current_limit == "Not found":
+                                plans_data[global_idx]["limit"] = cleaned_val
+                            elif is_hosp_limit:
+                                # Hospitalization limit always wins over life cover
+                                plans_data[global_idx]["limit"] = cleaned_val
+                            # else: once hospitalization limit is set, don't overwrite with life cover
+                        
+                        elif current_section == "premium":
+                            if is_ind:
+                                if plans_data[global_idx]["ind_prem"] == "Not found":
+                                    plans_data[global_idx]["ind_prem"] = cleaned_val
+                            elif is_fam:
+                                if plans_data[global_idx]["fam_prem"] == "Not found":
+                                    plans_data[global_idx]["fam_prem"] = cleaned_val
+                        
+                        elif current_section == "count":
+                            if is_ind:
+                                plans_data[global_idx]["ind_count"] = cleaned_val
+                            elif is_fam:
+                                plans_data[global_idx]["fam_count"] = cleaned_val
+            
             return plans_data
     except Exception as e:
         print(f"Dynamic plan extraction error: {e}")
@@ -683,13 +837,33 @@ def extract_rich_fields(text, ins_class="health", pdf_path=None):
     if m:
         data["insured_name"] = m.group(1).strip()
     else:
-        m = re.search(r"Insured\s*:?\s*(?:M/s\s*)?(.*?)(?:\s{2,}|\n|\Z)", text, re.IGNORECASE)
+        m = re.search(r"Insured\s*:\s*(?:M/s\s*)?(.*?)(?:\s{2,}|\n|\Z)", text, re.IGNORECASE)
         if m:
             data["insured_name"] = m.group(1).strip()
         else:
             m = re.search(r"Name of Customer\s*:?\s*(.*?)(?:\s{2,}|\n|\Z)", text, re.IGNORECASE)
             if m:
                 data["insured_name"] = m.group(1).strip()
+                
+    # Fallback to first line if still "Not found" or "Person"
+    if data["insured_name"] in ["Not found", "Person", ""]:
+        lines = [line.strip() for line in text.split("\n") if line.strip()]
+        for line in lines[:5]:
+            line_lower = line.lower()
+            if len(line) < 3 or len(line) > 60:
+                continue
+            if re.search(r'\b\d{1,2}[-/.]\w+[-/.]\d{2,4}\b', line) or re.search(r'\b\d{4}[-/.]\d{1,2}[-/.]\d{1,2}\b', line):
+                continue
+            if any(kw in line_lower for kw in [
+                "page", "date", "serial", "quotation", "proposal", "insurance", 
+                "dear", "solution", "benefit", "premium", "summary", "limit", 
+                "scheme", "hospital", "slip", "insurer", "client", "class"
+            ]):
+                continue
+            if re.match(r'^[\d\s.,:/()-]+$', line):
+                continue
+            data["insured_name"] = line
+            break
             
     # 2. Basic Premium (with General/Liability variations)
     m = re.search(r"Basic[ \t]+Premium[ \t]+(?:LKR[ \t]*)?([\d,]+\.\d+)", text, re.IGNORECASE)
