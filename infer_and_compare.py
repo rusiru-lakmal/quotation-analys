@@ -507,6 +507,16 @@ def extract_group_life_fields(text):
     else:
         data["medical_requirements"] = "Not required under Free Cover Limit"
         
+    # Post-process premiums: If benefit is present but premium is LKR 0.00, change to Included in Gross
+    for benefit_key, premium_key in [
+        ("accidental_death_benefit", "accidental_death_premium"),
+        ("tpd_benefit", "tpd_premium"),
+        ("ppd_benefit", "ppd_premium"),
+        ("critical_illness_cover", "critical_illness_premium")
+    ]:
+        if data[benefit_key] != "Not found" and data[premium_key] == "LKR 0.00":
+            data[premium_key] = "Included in Gross"
+        
     return data
 
 def extract_plans_dynamically(pdf_path):
@@ -1088,22 +1098,17 @@ def evaluate_suitability(quotes, ins_class):
                 score += 5
                 reasons.append("Hassle-free application (No medical tests required)")
         elif ins_class == "group_life":
-            adb = q.get("accidental_death_benefit", "Not found").lower()
-            if "not found" not in adb and "0.00" not in adb:
-                score += 8
-                reasons.append("Includes Accidental Death Benefit (ADB) cover")
-            tpd = q.get("tpd_benefit", "Not found").lower()
-            if "not found" not in tpd and "0.00" not in tpd:
-                score += 8
-                reasons.append("Includes Total Permanent Disability (TPD) cover")
-            ppd = q.get("ppd_benefit", "Not found").lower()
-            if "not found" not in ppd and "0.00" not in ppd:
-                score += 8
-                reasons.append("Includes Permanent Partial Disability (PPD) cover")
-            cic = q.get("critical_illness_cover", "Not found").lower()
-            if "not found" not in cic and "0.00" not in cic:
-                score += 8
-                reasons.append("Includes Critical Illness (CIC) cover")
+            for field, label in [
+                ("accidental_death_benefit", "Accidental Death Benefit (ADB) cover"),
+                ("tpd_benefit", "Total Permanent Disability (TPD) cover"),
+                ("ppd_benefit", "Permanent Partial Disability (PPD) cover"),
+                ("critical_illness_cover", "Critical Illness (CIC) cover")
+            ]:
+                val = q.get(field, "Not found").lower()
+                val_clean = val.replace("lkr", "").replace("rs.", "").replace("rs", "").strip()
+                if "not found" not in val and val_clean != "0.00" and val_clean != "0":
+                    score += 8
+                    reasons.append(f"Includes {label}")
                 
         # Calculate grade
         if score >= 75:
@@ -1211,7 +1216,8 @@ def generate_comparison_html(quotes, output_path):
         "suitability_score", "suitability_reasons", "is_best_pick", "recommendation_tag", "source_file",
         "repayment_period", "interest_rate", "tpd_benefit", "death_benefit", "medical_requirements",
         "accidental_death_benefit", "accidental_death_premium", "tpd_premium", "ppd_benefit", "ppd_premium",
-        "critical_illness_cover", "critical_illness_premium", "fcl_limit"
+        "critical_illness_cover", "critical_illness_premium", "fcl_limit",
+        "CLASS OF INSURANCE", "PERIOD OF COVER", "DATE", "Annual Premium"
     ]
     
     for k in all_keys:
