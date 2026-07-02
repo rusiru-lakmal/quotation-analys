@@ -1040,7 +1040,11 @@ def get_combined_quote_data(text, model_path, ins_class="health", pdf_path=None)
         return name
 
     if "insured_name" in combined:
-        combined["insured_name"] = clean_client_name(combined["insured_name"])
+        cleaned = clean_client_name(combined["insured_name"])
+        if cleaned and cleaned != "Not found":
+            combined["insured_name"] = cleaned.title()
+        else:
+            combined["insured_name"] = cleaned
         
     return combined
 
@@ -1243,12 +1247,7 @@ def generate_comparison_html(quotes, output_path):
         "CLASS OF INSURANCE", "PERIOD OF COVER", "DATE", "Annual Premium"
     ]
     
-    for k in all_keys:
-        has_str_val = any(isinstance(q.get(k), str) for q in quotes)
-        if k not in exclude_keys and has_str_val and len(k) < 50:
-            dynamic_keys.append(k)
-            
-    dynamic_keys.sort()
+    dynamic_keys = []
     
     # Build Card grid for ALL quotes at the top
     cards_html = ""
