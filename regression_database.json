@@ -1,0 +1,30 @@
+{
+  "SOFT LOGIC.pdf": {
+    "company": "Softlogic Life Insurance PLC",
+    "insured_name": "A",
+    "total_payable": "LKR 3,344,094.00"
+  },
+  "UNION.pdf": {
+    "company": "Union Assurance PLC",
+    "insured_name": "Avery Dennison Lanka (Pvt) Ltd",
+    "total_payable": "LKR 2,478,595.00"
+  },
+  "LOLC Car Quotation.pdf": {
+    "company": "LOLC General Insurance PLC",
+    "sum_insured": "LKR 13,500,000.00",
+    "total_payable": "LKR 220,460.66",
+    "tppd_limit": "LKR 15,000,000"
+  },
+  "Orient Car Quotation.pdf": {
+    "company": "Orient Insurance Limited",
+    "sum_insured": "LKR 13,500,000.00",
+    "total_payable": "LKR 228,356.12",
+    "towing_limit": "LKR 20,000.00"
+  },
+  "SLIC Car Quotation.pdf": {
+    "company": "Sri Lanka Insurance Corporation (SLIC)",
+    "sum_insured": "LKR 13,500,000.00",
+    "total_payable": "LKR 160,005.12",
+    "towing_limit": "LKR 20,000.00"
+  }
+}

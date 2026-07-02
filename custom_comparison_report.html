@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI-Driven Quotation Comparison Board</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #0b0f19;
+            --card-bg: rgba(255, 255, 255, 0.03);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --primary-glow: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+            --accent-green: #10b981;
+            --accent-blue: #3b82f6;
+            --text-main: #f3f4f6;
+            --text-muted: #9ca3af;
+        }
+        body {
+            font-family: 'Outfit', sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 40px 20px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 1100px;
+            width: 100%;
+            background: rgba(17, 24, 39, 0.7);
+            border: 1px solid var(--border-color);
+            border-radius: 24px;
+            padding: 40px;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(12px);
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+        .badge {
+            background: rgba(59, 130, 246, 0.1);
+            color: #60a5fa;
+            padding: 6px 16px;
+            border-radius: 50px;
+            font-size: 14px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            display: inline-block;
+            margin-bottom: 12px;
+            border: 1px solid rgba(59, 130, 246, 0.2);
+        }
+        h1 {
+            font-size: 36px;
+            font-weight: 800;
+            margin: 0;
+            background: var(--primary-glow);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.5px;
+        }
+        .subtitle {
+            color: var(--text-muted);
+            font-size: 16px;
+            margin-top: 8px;
+        }
+        .card-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 24px;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+        .card:hover {
+            transform: translateY(-4px);
+            border-color: rgba(59, 130, 246, 0.3);
+            box-shadow: 0 10px 20px rgba(59, 130, 246, 0.05);
+        }
+        .card.best-choice-card {
+            border: 2px solid #eab308;
+            background: rgba(234, 179, 8, 0.04);
+            box-shadow: 0 10px 30px rgba(234, 179, 8, 0.1);
+        }
+        .best-badge {
+            position: absolute;
+            top: -12px;
+            right: 20px;
+            background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+            color: #fff;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.5px;
+            box-shadow: 0 4px 10px rgba(217, 119, 6, 0.3);
+        }
+        .card h3 {
+            margin-top: 0;
+            font-size: 20px;
+            color: var(--text-main);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .card p {
+            color: var(--text-muted);
+            font-size: 14px;
+            line-height: 1.6;
+            margin: 8px 0 0 0;
+        }
+        .tag-icon {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .tag-icon.option-a { background: var(--accent-blue); }
+        .tag-icon.option-b { background: #c084fc; }
+        .tag-icon.option-c { background: #10b981; }
+        .tag-icon.option-d { background: #f59e0b; }
+        table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            margin-top: 25px;
+            border-radius: 16px;
+            overflow: hidden;
+            border: 1px solid var(--border-color);
+        }
+        th, td {
+            padding: 16px 20px;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+        }
+        th {
+            background: rgba(255, 255, 255, 0.02);
+            font-weight: 600;
+            color: var(--text-main);
+            text-transform: uppercase;
+            font-size: 13px;
+            letter-spacing: 0.5px;
+        }
+        tr:last-child td {
+            border-bottom: none;
+        }
+        tr:hover td {
+            background: rgba(255, 255, 255, 0.015);
+        }
+        .param-name {
+            font-weight: 600;
+            color: var(--text-muted);
+        }
+        .highlight {
+            color: #60a5fa;
+            font-weight: 600;
+        }
+        .total-row td {
+            background: rgba(16, 185, 129, 0.04);
+            font-weight: bold;
+        }
+        .premium-tag {
+            color: var(--accent-green);
+            font-weight: 700;
+        }
+        .section-header td {
+            background: rgba(255, 255, 255, 0.02);
+            font-weight: 800;
+            color: var(--text-main);
+            font-size: 14px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            border-bottom: 2px solid var(--border-color);
+        }
+        .footer {
+            margin-top: 40px;
+            text-align: center;
+            font-size: 12px;
+            color: var(--text-muted);
+            border-top: 1px solid var(--border-color);
+            padding-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="badge">Multi-Insurer AI Advisory Board</div>
+            <h1>AI-Driven Quotation Comparison Board</h1>
+            <div class="subtitle">Extracting, parsing, and grading quotations dynamically using Hybrid AI.</div>
+        </div>
+        
+        <div class="card-grid">
+            
+        <div class="card best-choice-card">
+            <div class="best-badge">🏆 AI RECOMMENDED BEST PICK</div>
+            <h3><span class="tag-icon option-a"></span> Option A: Union Assurance PLC</h3>
+            <p>
+                <strong>Insured Name:</strong> Avery Dennison Lanka (Pvt) Ltd<br>
+                <strong>Gross Premium:</strong> <span class="premium-tag">LKR 2,478,595.00</span><br>
+                <strong>Suitability Grade:</strong> <span class="highlight" style="font-size: 18px; font-weight: 800;">A+</span>
+            </p>
+            <ul style="padding-left: 20px; font-size: 13px; color: var(--text-muted); margin-top: 8px;">
+                <li>Includes Total Permanent Disability (TPD) cover</li><li>Includes full Death benefits (outstanding loan repayment)</li><li>Lowest absolute premium cost</li>
+            </ul>
+        </div>
+        
+        <div class="card">
+            
+            <h3><span class="tag-icon option-b"></span> Option B: Softlogic Life Insurance PLC</h3>
+            <p>
+                <strong>Insured Name:</strong> A<br>
+                <strong>Gross Premium:</strong> <span class="premium-tag">LKR 3,344,094.00</span><br>
+                <strong>Suitability Grade:</strong> <span class="highlight" style="font-size: 18px; font-weight: 800;">A</span>
+            </p>
+            <ul style="padding-left: 20px; font-size: 13px; color: var(--text-muted); margin-top: 8px;">
+                <li>Includes Total Permanent Disability (TPD) cover</li><li>Includes full Death benefits (outstanding loan repayment)</li>
+            </ul>
+        </div>
+        
+        </div>
+        
+        <table>
+            <thead>
+                <tr>
+                    <th>Key Comparison Metrics</th><th>Option A: Union Assurance PLC</th><th>Option B: Softlogic Life Insurance PLC</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr class="section-header"><td colspan="3">Underwriting Information</td></tr><tr><td class="param-name">Insured Client Name</td><td>Avery Dennison Lanka (Pvt) Ltd</td><td>A</td></tr><tr><td class="param-name">Underwriting Company</td><td>Union Assurance PLC</td><td>Softlogic Life Insurance PLC</td></tr><tr><td class="param-name">AI Suitability Grade</td><td class="highlight" style="font-weight: 800; font-size: 16px;">A+</td><td class="highlight" style="font-weight: 800; font-size: 16px;">A</td></tr><tr><td class="param-name">Coverage Limit</td><td>Not found</td><td>Not found</td></tr><tr><td class="param-name">Basic Premium</td><td>Not found</td><td>Not found</td></tr><tr><td class="param-name">Policy Fee</td><td>LKR 0.00</td><td>LKR 0.00</td></tr><tr class="total-row"><td class="param-name">Total Gross Premium Payable</td><td class="premium-tag">LKR 2,478,595.00</td><td class="premium-tag">LKR 3,344,094.00</td></tr><tr class="section-header"><td colspan="3">Loan Protection / Life Benefits & Specifications</td></tr><tr><td class="param-name">Repayment / Loan Period</td><td>Not found</td><td>Not found</td></tr><tr><td class="param-name">Loan Interest Rate</td><td>Not found</td><td>Not found</td></tr><tr><td class="param-name">Total Permanent Disability (TPD) Benefit</td><td>Included (covers Sickness & Accident)</td><td>Included (covers Sickness & Accident)</td></tr><tr><td class="param-name">Death Cover Benefit</td><td>Included (repay outstanding loan amount)</td><td>Included (repay outstanding loan amount)</td></tr><tr><td class="param-name">Underwriting Medical Requirements</td><td>Not found</td><td>Not found</td></tr><tr class="section-header"><td colspan="3">Other Discovered Quotation Details</td></tr><tr><td class="param-name">Annual Premium</td><td>Rs. 2,478,595.00</td><td>-</td></tr><tr><td class="param-name">CLASS OF INSURANCE</td><td>-</td><td>GROUP LIFE ASSURANCE</td></tr><tr><td class="param-name">DATE</td><td>-</td><td>07.05.2025</td></tr><tr><td class="param-name">PERIOD OF COVER</td><td>-</td><td>ONE YEAR (DATES TO BE AGREED)</td></tr>
+            </tbody>
+        </table>
+        
+        
+        
+        <div class="footer">
+            Generated using Dynamic Hybrid AI Knowledge Extraction & Suitability Grading | TryAI Insurance Toolkit
+        </div>
+    </div>
+</body>
+</html>
