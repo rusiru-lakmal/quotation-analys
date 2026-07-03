@@ -144,6 +144,17 @@ def preprocess_pdf_text_spaces(text):
 def detect_insurance_class(text1, text2):
     combined = (text1 + " " + text2).lower()
     
+    # ---- Public Liability Insurance (PLI) — detect before generic general ----
+    public_liability_keywords = [
+        "public liability", "limit of indemnity", "any one accident",
+        "third party liability", "property damage liability", "bodily injury liability",
+        "limit per event", "in the aggregate", "aggregate limit of indemnity",
+        "compulsory excess", "public liability insurance"
+    ]
+    pli_score = sum(2 if kw in combined else 0 for kw in public_liability_keywords)
+    if pli_score >= 3:
+        return "public_liability"
+    
     # Check if it's a liability / cargo / general quote first to override motor false-positives
     if any(x in combined for x in ["freight forwarding", "cargo liability", "professional indemnity", "errors & omissions", "errors and omissions"]):
         return "general"
@@ -805,6 +816,204 @@ def extract_plans_dynamically(pdf_path):
         print(f"Dynamic plan extraction error: {e}")
         return []
 
+def extract_public_liability_fields(text):
+    """
+    Extracts all relevant fields from a Public Liability Insurance (PLI) quotation.
+    Key fields: Limit of Indemnity (per occurrence + aggregate), Deductible/Excess,
+    Jurisdiction/Territory, Gross Premium, Admin/Policy fees, VAT, Total Payable.
+    """
+    text = preprocess_pdf_text_spaces(text)
+    
+    data = {
+        "class": "public_liability",
+        "insured_name": "Not found",
+        "type_of_cover": "Public Liability Insurance",
+        "limit_per_occurrence": "Not found",
+        "aggregate_limit": "Not found",
+        "deductible": "Not found",
+        "jurisdiction": "Not found",
+        "period_of_cover": "Not found",
+        "no_of_locations": "Not found",
+        "conditions": "Not found",
+        "gross_premium": "Not found",
+        "basic_premium": "Not found",
+        "admin_fee": "Not found",
+        "policy_fee": "LKR 0.00",
+        "vat": "Not found",
+        "cess_fee": "LKR 0.00",
+        "total_payable": "Not found",
+        "plans": []
+    }
+    
+    # 1. Insured Name
+    for pat in [
+        r"Name\s+of\s+(?:the\s+)?Insured\s*:?\s*(.*?)(?:\s{2,}|\n|\Z)",
+        r"NAME\s+OF\s+THE\s+INSURED\s*:?\s*(.*?)(?:\s{2,}|\n|\Z)",
+        r"Insured\s*:?\s*(?:M/s\s*)?(.*?)(?:\s{2,}|\n|\Z)",
+        r"Customer\s+Name\s*:?\s*(.*?)(?:\s{2,}|\n|\Z)",
+    ]:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m and m.group(1).strip() and len(m.group(1).strip()) > 2:
+            val = m.group(1).strip()
+            # Skip if it looks like a label or date
+            if not re.match(r'^[\d\s./:(),-]+$', val) and not any(kw in val.lower() for kw in ["date", "period", "quotation", "premium"]):
+                data["insured_name"] = val.title()
+                break
+    if data["insured_name"] == "Not found":
+        for line in [l.strip() for l in text.split("\n") if l.strip()][:6]:
+            if len(line) < 5 or len(line) > 80: continue
+            if re.match(r'^[\d\s.,:/()-]+$', line): continue
+            if any(kw in line.lower() for kw in ["date","serial","quotation","insurance","dear","limit","premium","liability","tel","web"]): continue
+            data["insured_name"] = line.title()
+            break
+    
+    # 2. Limit Per Occurrence / Any One Accident
+    for pat in [
+        r"Any\s+One\s+(?:Accident|Occurrence|Event)\s*[:\-]?\s*(?:Limited\s+to\s+)?(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?(?:/-)?)",
+        r"Limit\s+(?:of\s+Indemnity\s+)?Per\s+(?:Occurrence|Event|Accident|Claim)\s*[:\-]?\s*(?:LKR|Rs\.?|Limited\s+to\s+LKR)?\s*([\d,]+(?:\.\d+)?(?:/-)?)",
+        r"Limit\s+Per\s+Event\s*[:\-]?\s*(?:Limited\s+to\s+)?(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?(?:/-)?)",
+        r"Per\s+Occurrence\s+Limit\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?)",
+        r"(?:AOA|AOE|AOO)\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?)",
+        r"Each\s+and\s+Every\s+(?:Claim|Occurrence|Event)\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?)",
+    ]:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            val = m.group(1).replace("/-", "").strip()
+            data["limit_per_occurrence"] = "LKR " + val
+            break
+    
+    # 3. Annual Aggregate Limit
+    for pat in [
+        r"(?:In\s+)?Annual\s+Aggregate\s*[:\-]?\s*(?:Limited\s+to\s+)?(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?(?:/-)?)",
+        r"Aggregate\s+Limit\s+(?:of\s+Indemnity\s*)?[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?)",
+        r"In\s+the\s+Aggregate\s*[:\-]?\s*(?:Limited\s+to\s+)?(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?(?:/-)?)",
+        r"(?:Policy\s+)?Aggregate\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?)",
+    ]:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            val = m.group(1).replace("/-", "").strip()
+            data["aggregate_limit"] = "LKR " + val
+            break
+    
+    # 4. Deductible / Excess
+    for pat in [
+        r"(?:Compulsory\s+)?Excess\s+(?:of\s+)?(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?(?:/-)?)\s*(?:per\s+(?:claim|accident|event|occurrence))?",
+        r"Deductible\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?)",
+        r"Loss\s+Retention\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?)",
+    ]:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            val = m.group(1).replace("/-", "").strip()
+            data["deductible"] = "LKR " + val + " per claim"
+            break
+    
+    # 5. Jurisdiction / Territorial Limits
+    for pat in [
+        r"(?:Territorial\s+Limits?|Territory)\s*[:\|]?\s*(.*?)(?:\n|\s{3,}|\Z)",
+        r"Jurisdiction\s*(?:\|\s*Territory)?\s*[:\|]?\s*(.*?)(?:\n|\s{3,}|\Z)",
+    ]:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            val = m.group(1).strip().strip(":").strip()
+            if 2 < len(val) < 80:
+                data["jurisdiction"] = val
+                break
+    
+    # 6. Period of Cover
+    for pat in [
+        r"Period\s+of\s+(?:Insurance|Cover|Coverage)\s*[:\-]?\s*(.*?)(?:\n|\s{3,}|\Z)",
+        r"(?:Cover|Policy)\s+Period\s*[:\-]?\s*(.*?)(?:\n|\s{3,}|\Z)",
+    ]:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            val = m.group(1).strip()
+            if 2 < len(val) < 100:
+                data["period_of_cover"] = val
+                break
+    
+    # 7. Number of Locations
+    m = re.search(r"(\d+)\s+No['\u2019]?s?\s+of\s+Locations?", text, re.IGNORECASE)
+    if m:
+        data["no_of_locations"] = m.group(1) + " location(s)"
+    else:
+        m = re.search(r"(?:No\.\s*of\s+Locations?|Number\s+of\s+(?:Risk\s+)?Locations?)\s*[:\-]?\s*(.*?)(?:\n|\s{3,}|\Z)", text, re.IGNORECASE)
+        if m and m.group(1).strip():
+            data["no_of_locations"] = m.group(1).strip()
+    
+    # 8. Conditions / Defense Costs
+    for pat in [
+        r"Conditions?\s*[:\-]\s*(.*?(?:[Dd]efense|[Dd]efence)[^\n]*)",
+        r"([Ii]nclusive\s+of\s+[Dd]efense\s+[Cc]ost(?:s)?[^\n]*)",
+        r"([Dd]efense\s+[Cc]ost(?:s)?\s+[Ii]ncluded[^\n]*)",
+    ]:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            data["conditions"] = m.group(1).strip()
+            break
+    
+    # 9. Gross / Basic Premium
+    for pat in [
+        r"(?:Annual\s+)?Gross\s+Premium\s*(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?)",
+        r"(?:Gross|Net|Annual)\s+Premium\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?)",
+        r"Basic\s+Premium\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?)",
+        r"Premium\s+(?:Excl|Excluding)\.?\s+Tax(?:es)?\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?)",
+    ]:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            raw = m.group(1).strip()
+            # Only treat as gross if it's a plausible amount (> 1000)
+            try:
+                if float(raw.replace(",", "")) > 1000:
+                    val = "LKR " + raw
+                    data["gross_premium"] = val
+                    data["basic_premium"] = val
+                    break
+            except ValueError:
+                pass
+    
+    # 10. Admin / Policy Fee
+    m = re.search(r"Admin(?:istration|istrative)?\.?\s+Fee\s*(?:\([^)]+\))?\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+\.\d+)", text, re.IGNORECASE)
+    if m:
+        data["admin_fee"] = "LKR " + m.group(1).strip()
+    m = re.search(r"Policy\s+Fee\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+\.\d+)", text, re.IGNORECASE)
+    if m:
+        data["policy_fee"] = "LKR " + m.group(1).strip()
+    
+    # 11. VAT
+    m = re.search(r"VAT\s*(?:-?\s*\d+\s*%\s*)?[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+\.\d+)", text, re.IGNORECASE)
+    if not m:
+        m = re.search(r"Value\s+Added\s+Tax\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+\.\d+)", text, re.IGNORECASE)
+    if m:
+        data["vat"] = "LKR " + m.group(1).strip()
+    
+    # 12. Cess
+    m = re.search(r"Cess\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+\.\d+)", text, re.IGNORECASE)
+    if m:
+        data["cess_fee"] = "LKR " + m.group(1).strip()
+    
+    # 13. Total Payable
+    for pat in [
+        r"Total\s+Premium\s+(?:Including|Incl\.?)\s+(?:Taxes?|Tax)\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?)",
+        r"Total\s+Premium\s+Payable\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?)",
+        r"Total\s+(?:Premium\s+)?(?:Due|Payable)\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?)",
+        r"Total\s+Amount\s+Payable\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?)",
+        r"^\s*TOTAL\s+(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?)",
+    ]:
+        m = re.search(pat, text, re.IGNORECASE | re.MULTILINE)
+        if m:
+            data["total_payable"] = "LKR " + m.group(1).strip()
+            break
+    # Fallback: use gross_premium as total estimate if both remain unfound
+    if data["total_payable"] == "Not found" and data["gross_premium"] != "Not found":
+        data["total_payable"] = data["gross_premium"]
+    
+    # 14. Type of Cover
+    m = re.search(r"Type\s+of\s+Cover\s*[:\-]?\s*(.*?)(?:\n|\s{3,}|\Z)", text, re.IGNORECASE)
+    if m and m.group(1).strip():
+        data["type_of_cover"] = m.group(1).strip()
+    
+    return data
+
 def extract_rich_fields(text, ins_class="health", pdf_path=None):
     """
     Parses complex structural fields (fees, taxes, coverage limits) for Health and General/Liability Insurance quotes.
@@ -1115,12 +1324,17 @@ class GeneralParser(BaseParser):
     def parse(self, text, pdf_path=None):
         return extract_rich_fields(text, "general", pdf_path)
 
+class PublicLiabilityParser(BaseParser):
+    def parse(self, text, pdf_path=None):
+        return extract_public_liability_fields(text)
+
 def get_parser(doc_class):
     parsers = {
         "group_life": GroupLifeParser(),
         "motor": MotorParser(),
         "health": HealthParser(),
-        "life": GroupLifeParser()
+        "life": GroupLifeParser(),
+        "public_liability": PublicLiabilityParser(),
     }
     return parsers.get(doc_class, GeneralParser())
 
@@ -1310,6 +1524,51 @@ def evaluate_suitability(quotes, ins_class):
                 if "not found" not in val and val_clean != "0.00" and val_clean != "0":
                     score += 8
                     reasons.append(f"Includes {label}")
+        
+        elif ins_class == "public_liability":
+            # Aggregate limit scoring
+            agg_str = q.get("aggregate_limit", "Not found")
+            agg_m = re.search(r"([\d,]+(?:\.\d+)?)", agg_str)
+            if agg_m:
+                agg_val = float(agg_m.group(1).replace(",", ""))
+                if agg_val >= 5_000_000:
+                    score += 15
+                    reasons.append("Very high aggregate limit (≥ LKR 5M)")
+                elif agg_val >= 2_000_000:
+                    score += 10
+                    reasons.append("High aggregate limit (≥ LKR 2M)")
+                elif agg_val >= 1_000_000:
+                    score += 7
+                    reasons.append("Adequate aggregate limit (≥ LKR 1M)")
+            
+            # Per-occurrence limit scoring
+            occ_str = q.get("limit_per_occurrence", "Not found")
+            occ_m = re.search(r"([\d,]+(?:\.\d+)?)", occ_str)
+            if occ_m:
+                occ_val = float(occ_m.group(1).replace(",", ""))
+                if occ_val >= 1_000_000:
+                    score += 8
+                    reasons.append("High per-occurrence limit (≥ LKR 1M)")
+                elif occ_val >= 500_000:
+                    score += 5
+            
+            # Lower deductible = better
+            ded_str = q.get("deductible", "Not found")
+            ded_m = re.search(r"([\d,]+(?:\.\d+)?)", ded_str)
+            if ded_m:
+                ded_val = float(ded_m.group(1).replace(",", ""))
+                if ded_val <= 10_000:
+                    score += 8
+                    reasons.append("Very low excess / deductible per claim")
+                elif ded_val <= 25_000:
+                    score += 5
+                    reasons.append("Competitive deductible / excess per claim")
+            
+            # Defense costs included
+            cond = q.get("conditions", "").lower()
+            if "defense" in cond or "defence" in cond:
+                score += 5
+                reasons.append("Defense costs included in coverage")
                 
         # Calculate grade
         if score >= 75:
@@ -1418,7 +1677,11 @@ def generate_comparison_html(quotes, output_path):
         "repayment_period", "interest_rate", "tpd_benefit", "death_benefit", "medical_requirements",
         "accidental_death_benefit", "accidental_death_premium", "tpd_premium", "ppd_benefit", "ppd_premium",
         "critical_illness_cover", "critical_illness_premium", "fcl_limit",
-        "CLASS OF INSURANCE", "PERIOD OF COVER", "DATE", "Annual Premium"
+        "CLASS OF INSURANCE", "PERIOD OF COVER", "DATE", "Annual Premium",
+        # PLI-specific keys (shown in their own dedicated section)
+        "limit_per_occurrence", "aggregate_limit", "deductible", "jurisdiction",
+        "period_of_cover", "no_of_locations", "conditions", "type_of_cover",
+        "gross_premium",
     ]
     
     dynamic_keys = []
@@ -1565,6 +1828,30 @@ def generate_comparison_html(quotes, output_path):
             for q in quotes:
                 rows_html += f'<td>{q.get(key, "Not found")}</td>'
             rows_html += "</tr>"
+    
+    elif ins_class == "public_liability":
+        rows_html += f'<tr class="section-header"><td colspan="{len(quotes) + 1}">Public Liability Coverage Details</td></tr>'
+        
+        pli_benefits = [
+            ("type_of_cover",        "Type of Cover"),
+            ("limit_per_occurrence", "Limit of Indemnity — Any One Accident / Occurrence"),
+            ("aggregate_limit",      "Annual Aggregate Limit of Indemnity"),
+            ("deductible",           "Deductible / Excess Per Claim"),
+            ("jurisdiction",         "Territorial Jurisdiction"),
+            ("period_of_cover",      "Period of Insurance / Cover"),
+            ("no_of_locations",      "Number of Risk Locations"),
+            ("conditions",           "Conditions / Defense Cost"),
+        ]
+        
+        for key, label in pli_benefits:
+            if any(q.get(key, "Not found") not in ["Not found", "", "-"] for q in quotes):
+                rows_html += f'<tr><td class="param-name">{label}</td>'
+                for q in quotes:
+                    val = q.get(key, "Not found")
+                    cell_class = "highlight" if key in ["limit_per_occurrence", "aggregate_limit"] else ""
+                    rows_html += f'<td class="{cell_class}">{val}</td>'
+                rows_html += "</tr>"
+
             
     # Dynamic Parameters Section
     if dynamic_keys:

@@ -56106,5 +56106,59 @@
       "O",
       "B-COPAY"
     ]
+  },
+  {
+    "tokens": [
+      "Public",
+      "Liability",
+      "Gross",
+      "Premium",
+      "LKR",
+      "45,000.00",
+      "per",
+      "year",
+      "for",
+      "two",
+      "locations."
+    ],
+    "ner_tags": [
+      "O",
+      "O",
+      "O",
+      "O",
+      "B-PREMIUM",
+      "I-PREMIUM",
+      "O",
+      "O",
+      "O",
+      "O",
+      "O"
+    ]
+  },
+  {
+    "tokens": [
+      "HNB",
+      "General",
+      "Insurance",
+      "Limited",
+      "Quotation",
+      "No",
+      "QOTBDUMIS202629819",
+      "for",
+      "Public",
+      "Liability."
+    ],
+    "ner_tags": [
+      "B-COMPANY",
+      "I-COMPANY",
+      "I-COMPANY",
+      "I-COMPANY",
+      "O",
+      "O",
+      "O",
+      "O",
+      "O",
+      "O"
+    ]
   }
 ]
