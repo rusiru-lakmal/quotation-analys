@@ -869,7 +869,7 @@ def extract_public_liability_fields(text):
     
     # 2. Limit Per Occurrence / Any One Accident
     for pat in [
-        r"Any\s+One\s+(?:Accident|Occurrence|Event)\s*[:\-]?\s*(?:Limited\s+to\s+)?(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?(?:/-)?)",
+        r"Any\s+One\s+(?:Accident|Occurrence|Event)\s*(?:/\s*(?:Accident|Occurrence|Event)\s*)?[:\-]?\s*(?:Limited\s+to\s+)?(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?(?:/-)?)",
         r"Limit\s+(?:of\s+Indemnity\s+)?Per\s+(?:Occurrence|Event|Accident|Claim)\s*[:\-]?\s*(?:LKR|Rs\.?|Limited\s+to\s+LKR)?\s*([\d,]+(?:\.\d+)?(?:/-)?)",
         r"Limit\s+Per\s+Event\s*[:\-]?\s*(?:Limited\s+to\s+)?(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?(?:/-)?)",
         r"Per\s+Occurrence\s+Limit\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?)",
@@ -897,9 +897,11 @@ def extract_public_liability_fields(text):
     
     # 4. Deductible / Excess
     for pat in [
-        r"(?:Compulsory\s+)?Excess\s+(?:of\s+)?(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?(?:/-)?)\s*(?:per\s+(?:claim|accident|event|occurrence))?",
-        r"Deductible\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?)",
-        r"Loss\s+Retention\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?)",
+        r"Deductible\s*[:\-]?\s*.*?(?:LKR|Rs\.?)\.?\s*([\d,]+(?:/-)?)\s*(?:whichever\s+is\s+higher)?",
+        r"minimum\s+of\s+(?:LKR|Rs\.?)\.?\s*([\d,]+(?:/-)?)",
+        r"Excess(?:es)?\s*.*?(?:LKR|Rs\.?)\.?\s*([\d,]+(?:/-)?)\s*(?:per\s+(?:claim|accident|event|occurrence))?",
+        r"(?:Compulsory\s+)?Excess\s+(?:of\s+)?(?:LKR|Rs\.?)\.?\s*([\d,]+(?:\.\d+)?(?:/-)?)\s*(?:per\s+(?:claim|accident|event|occurrence))?",
+        r"Loss\s+Retention\s*[:\-]?\s*(?:LKR|Rs\.?)\.?\s*([\d,]+(?:\.\d+)?)",
     ]:
         m = re.search(pat, text, re.IGNORECASE)
         if m:
@@ -961,7 +963,6 @@ def extract_public_liability_fields(text):
         m = re.search(pat, text, re.IGNORECASE)
         if m:
             raw = m.group(1).strip()
-            # Only treat as gross if it's a plausible amount (> 1000)
             try:
                 if float(raw.replace(",", "")) > 1000:
                     val = "LKR " + raw
@@ -994,6 +995,7 @@ def extract_public_liability_fields(text):
     # 13. Total Payable
     for pat in [
         r"Total\s+Premium\s+(?:Including|Incl\.?)\s+(?:Taxes?|Tax)\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?)",
+        r"Total\s+Premium\s*(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?)",
         r"Total\s+Premium\s+Payable\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?)",
         r"Total\s+(?:Premium\s+)?(?:Due|Payable)\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?)",
         r"Total\s+Amount\s+Payable\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+(?:\.\d+)?)",
@@ -1371,12 +1373,15 @@ def get_combined_quote_data(text, model_path, ins_class="health", pdf_path=None)
     elif "fairfirst" in text_lower or "first insurance" in text_lower:
         combined["company"] = "Fairfirst Insurance Limited"
         
-    # ML model fallback for total premium
+    # ML model fallback for total premium (with sanity check)
     if combined.get("total_payable") in ["Not found", "LKR 0.00", "0.00"] and ml_data.get("premium") != "Not found":
         val = ml_data["premium"]
-        if not val.startswith("LKR") and not val.startswith("Rs"):
-            val = "LKR " + val
-        combined["total_payable"] = val
+        val_digits = re.sub(r"[^\d]", "", val)
+        # Check if the extracted premium is a valid number (> 100)
+        if val_digits and len(val_digits) >= 3 and not any(kw in val.lower() for kw in ["june", "july", "qot", "date", "no"]):
+            if not val.startswith("LKR") and not val.startswith("Rs"):
+                val = "LKR " + val
+            combined["total_payable"] = val
         
     # Add dynamically extracted key-value pairs
     dyn_params = extract_dynamic_parameters(text)
