@@ -155,6 +155,17 @@ def detect_insurance_class(text1, text2):
     if pli_score >= 3:
         return "public_liability"
     
+    # ---- Fire Insurance (Fire & Allied Perils) — detect before generic general ----
+    fire_keywords = [
+        "fire & lightning", "fire commercial", "fire takaful",
+        "fire commercial takaful", "fire and lightning", "fire & allied",
+        "sum covered", "textile shop", "building", "machinery",
+        "stock in trade", "riot & strike cover", "takaful fire insurance"
+    ]
+    fire_score = sum(2 if kw in combined else 0 for kw in fire_keywords)
+    if fire_score >= 3:
+        return "fire"
+        
     # Check if it's a liability / cargo / general quote first to override motor false-positives
     if any(x in combined for x in ["freight forwarding", "cargo liability", "professional indemnity", "errors & omissions", "errors and omissions"]):
         return "general"
@@ -816,6 +827,221 @@ def extract_plans_dynamically(pdf_path):
         print(f"Dynamic plan extraction error: {e}")
         return []
 
+def extract_fire_fields(text):
+    """
+    Extracts all relevant fields from a Fire and Allied Perils Insurance quotation.
+    Key fields: Sum Insured property breakdown, Perils covered, Deductible/Excess,
+    Gross Premium, and detailed premium/fee breakdown.
+    """
+    text = preprocess_pdf_text_spaces(text)
+    
+    data = {
+        "class": "fire",
+        "insured_name": "Not found",
+        "type_of_cover": "Fire & Allied Perils Takaful Insurance",
+        "coverage_limit": "Not found", # Total Sum Covered
+        "deductible": "Not found",
+        "sum_insured_breakdown": [],
+        "perils_covered": [],
+        # Financials
+        "gross_premium": "Not found",
+        "basic_premium": "Not found",
+        "riot_strike_premium": "LKR 0.00",
+        "terrorism_premium": "LKR 0.00",
+        "admin_fee": "LKR 0.00",
+        "policy_fee": "LKR 0.00",
+        "vat": "LKR 0.00",
+        "stamp_fee": "LKR 0.00",
+        "cess_fee": "LKR 0.00",
+        "total_payable": "Not found",
+        "plans": []
+    }
+    
+    # 1. Insured Name
+    for pat in [
+        r"Name\s+of\s+(?:the\s+)?Insured\s*:?\s*(.*?)(?:\s{2,}|\n|\Z)",
+        r"NAME\s+OF\s+THE\s+INSURED\s*:?\s*(.*?)(?:\s{2,}|\n|\Z)",
+        r"Proposer's\s+Name\s*:?\s*(.*?)(?:\s{2,}|\n|\Z)",
+        r"Insured\s*:?\s*(?:M/s\s*)?(.*?)(?:\s{2,}|\n|\Z)",
+        r"Customer\s+Name\s*:?\s*(.*?)(?:\s{2,}|\n|\Z)",
+    ]:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m and m.group(1).strip() and len(m.group(1).strip()) > 2:
+            val = m.group(1).strip()
+            if not re.match(r'^[\d\s./:(),-]+$', val) and not any(kw in val.lower() for kw in ["date", "period", "quotation", "premium"]):
+                data["insured_name"] = val.title()
+                break
+    if data["insured_name"] == "Not found":
+        for line in [l.strip() for l in text.split("\n") if l.strip()][:6]:
+            if len(line) < 5 or len(line) > 80: continue
+            if re.match(r'^[\d\s.,:/()-]+$', line): continue
+            if any(kw in line.lower() for kw in ["date","serial","quotation","insurance","dear","limit","premium","liability","tel","web"]): continue
+            data["insured_name"] = line.title()
+            break
+
+    # 2. Total Sum Covered
+    for pat in [
+        r"Total\s+Sum\s*(?:Covered|Insured)\s*[:\-]?\s*(?:LKR|Rs\.?)\s*([\d,]+\.\d+)",
+        r"Sum\s*(?:Covered|Insured)\s*\(Rs\)\s*([\d,]+\.\d+)",
+        r"Total\s+Sum\s+Covered\s*[:\-]?\s*([\d,]+\.\d+)",
+        r"Total\s+Sum\s+Covered\s+LKR\s+([\d,]+\.\d+)",
+        r"Aggregate\s+Sum\s+Insured\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+\.\d+)",
+    ]:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            data["coverage_limit"] = "LKR " + m.group(1).strip()
+            break
+            
+    # 3. Sum Covered Breakdown (discover property sums)
+    breakdown_pat = r"(?:-\s*)?On\s+([A-Za-z0-9\s&()'\u2019/]+?)\s*(?:Sum\s+Covered\s*)?[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+\.\d+)"
+    for line in text.split("\n"):
+        m = re.search(breakdown_pat, line, re.IGNORECASE)
+        if m:
+            prop = m.group(1).strip()
+            val = m.group(2).strip()
+            # Clean property name if it contains colon/dash suffix
+            prop_clean = re.sub(r'^\s*-\s*', '', prop).strip()
+            if prop_clean.lower() not in ["premium", "total", "sum covered", "contribution"]:
+                data["sum_insured_breakdown"].append({
+                    "property": prop_clean,
+                    "value": "LKR " + val
+                })
+                
+    # 4. Perils Covered
+    perils_map = {
+        "Fire & Lightning": ["fire", "lightning"],
+        "Riot & Strike": ["riot", "strike"],
+        "Terrorism": ["terrorism"],
+        "Malicious Damage": ["malicious"],
+        "Explosion": ["explosion"],
+        "Cyclone, Storm & Tempest": ["cyclone", "storm", "tempest"],
+        "Flood": ["flood"],
+        "Earthquake": ["earthquake"],
+        "Burglary": ["burglary"],
+        "Electrical Extra": ["electrical extra", "electrical wiring"]
+    }
+    for label, keywords in perils_map.items():
+        if any(kw in text.lower() for kw in keywords):
+            data["perils_covered"].append(label)
+
+    # 5. Deductible / Excess
+    ded_lines = []
+    in_ded = False
+    for line in text.split("\n"):
+        line_strip = line.strip()
+        if "deductible" in line_strip.lower() or "excesses on each" in line_strip.lower():
+            in_ded = True
+            continue
+        if in_ded:
+            # End section if another major block starts
+            if not line_strip or any(kw in line_strip.lower() for kw in ["warranty", "condition", "exclusion", "validity", "special note"]):
+                in_ded = False
+            else:
+                # Filter out garbage line separators
+                if len(line_strip) > 3 and not line_strip.startswith("-----") and not line_strip.startswith("====="):
+                    ded_lines.append(line_strip)
+    if ded_lines:
+        data["deductible"] = "; ".join(ded_lines)
+
+    # 6. Basic Premium / Basic Contribution
+    for pat in [
+        r"(?:Basic\s+(?:Premium|Contribution|Takaful\s+Contribution))\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+\.\d+)",
+    ]:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            data["basic_premium"] = "LKR " + m.group(1).strip()
+            data["gross_premium"] = "LKR " + m.group(1).strip()
+            break
+            
+    # 7. Strike, Riot & Civil Commotion Premium
+    for pat in [
+        r"(?:Strike\s*&\s*Riot|Riot\s*&\s*Strike)(?:\s+Premium|\s+Contribution)?\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+\.\d+)",
+    ]:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            data["riot_strike_premium"] = "LKR " + m.group(1).strip()
+            break
+
+    # 8. Terrorism Premium
+    for pat in [
+        r"Terrorism(?:\s+Premium|\s+Contribution)?\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+\.\d+)",
+    ]:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            data["terrorism_premium"] = "LKR " + m.group(1).strip()
+            break
+
+    # 9. Administrative Charges / Admin Fee
+    for pat in [
+        r"(?:Admin(?:istrative|istration)?\s+(?:Fee|Charges?|Charges))\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+\.\d+)",
+    ]:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            data["admin_fee"] = "LKR " + m.group(1).strip()
+            break
+
+    # 10. Policy Fees / Policy Fee
+    for pat in [
+        r"Policy\s+Fee(?:s)?\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+\.\d+)",
+    ]:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            data["policy_fee"] = "LKR " + m.group(1).strip()
+            break
+
+    # 11. VAT
+    for pat in [
+        r"VAT\s*(?:-?\s*\d+\s*%)?\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+\.\d+)",
+        r"Value\s+Added\s+Tax\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+\.\d+)",
+    ]:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            data["vat"] = "LKR " + m.group(1).strip()
+            break
+
+    # 12. Stamp Fee / Stamp Duty
+    for pat in [
+        r"Stamp\s*(?:Duty|Fee)?\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+\.\d+)",
+    ]:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            data["stamp_fee"] = "LKR " + m.group(1).strip()
+            break
+
+    # 13. Cess
+    for pat in [
+        r"Cess\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+\.\d+)",
+    ]:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            data["cess_fee"] = "LKR " + m.group(1).strip()
+            break
+
+    # 14. Total Amount Payable
+    for pat in [
+        r"Total\s+(?:Amount\s*Payable|AmountPayable|Premium|Contribution)?\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+\.\d+)",
+        r"Total\s*[:\-]?\s*(?:LKR|Rs\.?)?\s*([\d,]+\.\d+)",
+    ]:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            data["total_payable"] = "LKR " + m.group(1).strip()
+            break
+            
+    if data["total_payable"] == "Not found" and data["gross_premium"] != "Not found":
+        data["total_payable"] = data["gross_premium"]
+
+    # 15. Type of Cover
+    for pat in [
+        r"Type\s*(?:of\s+Cover)?\s*[:\-]?\s*(.*?)(?:\n|\s{3,}|\Z)",
+        r"Class\s+of\s+(?:Takaful|Insurance)\s*[:\-]?\s*(.*?)(?:\n|\s{3,}|\Z)",
+    ]:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m and m.group(1).strip():
+            data["type_of_cover"] = m.group(1).strip()
+            break
+
+    return data
+
 def extract_public_liability_fields(text):
     """
     Extracts all relevant fields from a Public Liability Insurance (PLI) quotation.
@@ -1330,6 +1556,10 @@ class PublicLiabilityParser(BaseParser):
     def parse(self, text, pdf_path=None):
         return extract_public_liability_fields(text)
 
+class FireInsuranceParser(BaseParser):
+    def parse(self, text, pdf_path=None):
+        return extract_fire_fields(text)
+
 def get_parser(doc_class):
     parsers = {
         "group_life": GroupLifeParser(),
@@ -1337,6 +1567,7 @@ def get_parser(doc_class):
         "health": HealthParser(),
         "life": GroupLifeParser(),
         "public_liability": PublicLiabilityParser(),
+        "fire": FireInsuranceParser(),
     }
     return parsers.get(doc_class, GeneralParser())
 
@@ -1372,6 +1603,10 @@ def get_combined_quote_data(text, model_path, ins_class="health", pdf_path=None)
         combined["company"] = "Sri Lanka Insurance Corporation (SLIC)"
     elif "fairfirst" in text_lower or "first insurance" in text_lower:
         combined["company"] = "Fairfirst Insurance Limited"
+    elif "people" in text_lower:
+        combined["company"] = "People's Insurance PLC"
+    elif "amana" in text_lower or "takaful" in text_lower:
+        combined["company"] = "Amana Takaful PLC"
         
     # ML model fallback for total premium (with sanity check)
     if combined.get("total_payable") in ["Not found", "LKR 0.00", "0.00"] and ml_data.get("premium") != "Not found":
@@ -1575,6 +1810,33 @@ def evaluate_suitability(quotes, ins_class):
                 score += 5
                 reasons.append("Defense costs included in coverage")
                 
+        elif ins_class == "fire":
+            # Perils count scoring: more perils = wider coverage
+            perils = q.get("perils_covered", [])
+            if len(perils) >= 8:
+                score += 15
+                reasons.append("Comprehensive coverage (8+ key perils covered)")
+            elif len(perils) >= 5:
+                score += 10
+                reasons.append("Good coverage (5+ key perils covered)")
+            
+            # Specific key perils check
+            if "Terrorism" in perils:
+                score += 8
+                reasons.append("Includes Terrorism Cover (TC)")
+            if "Riot & Strike" in perils:
+                score += 5
+                reasons.append("Includes Strike, Riot & Civil Commotion (SRCC)")
+                
+            # Deductible check
+            ded = q.get("deductible", "").lower()
+            if "10,000" in ded:
+                score += 7
+                reasons.append("Low deductible for other claims (LKR 10,000)")
+            elif "25,000" in ded:
+                score += 4
+                reasons.append("Standard deductible for other claims (LKR 25,000)")
+                
         # Calculate grade
         if score >= 75:
             grade = "A+"
@@ -1683,10 +1945,12 @@ def generate_comparison_html(quotes, output_path):
         "accidental_death_benefit", "accidental_death_premium", "tpd_premium", "ppd_benefit", "ppd_premium",
         "critical_illness_cover", "critical_illness_premium", "fcl_limit",
         "CLASS OF INSURANCE", "PERIOD OF COVER", "DATE", "Annual Premium",
-        # PLI-specific keys (shown in their own dedicated section)
+        # PLI-specific keys
         "limit_per_occurrence", "aggregate_limit", "deductible", "jurisdiction",
         "period_of_cover", "no_of_locations", "conditions", "type_of_cover",
         "gross_premium",
+        # Fire-specific keys
+        "sum_insured_breakdown", "perils_covered", "riot_strike_premium", "terrorism_premium"
     ]
     
     dynamic_keys = []
@@ -1856,6 +2120,43 @@ def generate_comparison_html(quotes, output_path):
                     cell_class = "highlight" if key in ["limit_per_occurrence", "aggregate_limit"] else ""
                     rows_html += f'<td class="{cell_class}">{val}</td>'
                 rows_html += "</tr>"
+
+    elif ins_class == "fire":
+        rows_html += f'<tr class="section-header"><td colspan="{len(quotes) + 1}">Fire Takaful / Allied Perils Specifications</td></tr>'
+        
+        # 1. Perils Covered
+        rows_html += '<tr><td class="param-name">Allied Perils Covered</td>'
+        for q in quotes:
+            perils = q.get("perils_covered", [])
+            perils_html = "<div style='line-height: 1.6;'>" + "".join([f"<span class='badge' style='margin: 2px; font-size: 11px; display: inline-block;'>🛡️ {p}</span>" for p in perils]) + "</div>"
+            rows_html += f'<td>{perils_html if perils else "None"}</td>'
+        rows_html += '</tr>'
+        
+        # 2. Sum Insured Breakdown
+        rows_html += '<tr><td class="param-name">Sum Covered Property Breakdown</td>'
+        for q in quotes:
+            bd = q.get("sum_insured_breakdown", [])
+            bd_html = "<div style='font-size: 12px; line-height: 1.5; text-align: left; max-height: 250px; overflow-y: auto;'>" + "".join([f"<b>On {item['property']}:</b> {item['value']}<br>" for item in bd]) + "</div>"
+            rows_html += f'<td>{bd_html if bd else "None"}</td>'
+        rows_html += '</tr>'
+        
+        # 3. Riot & Strike Premium
+        rows_html += '<tr><td class="param-name">Strike & Riot (SRCC) Premium</td>'
+        for q in quotes:
+            rows_html += f'<td>{q.get("riot_strike_premium", "LKR 0.00")}</td>'
+        rows_html += '</tr>'
+        
+        # 4. Terrorism Premium
+        rows_html += '<tr><td class="param-name">Terrorism Cover (TC) Premium</td>'
+        for q in quotes:
+            rows_html += f'<td>{q.get("terrorism_premium", "LKR 0.00")}</td>'
+        rows_html += '</tr>'
+        
+        # 5. Deductible
+        rows_html += '<tr><td class="param-name">Deductible / Excess details</td>'
+        for q in quotes:
+            rows_html += f'<td style="font-size: 12px; line-height: 1.4; text-align: left;">{q.get("deductible", "Not found")}</td>'
+        rows_html += '</tr>'
 
             
     # Dynamic Parameters Section
